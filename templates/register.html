@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<span class="eyebrow">Sign up</span>
+<h1>회원가입</h1>
+<form class="panel" method="post">
+  <div class="field"><label>이름 (실명)</label><input name="name" required></div>
+  <div class="field"><label>전화번호</label><input name="phone" placeholder="01012345678" required></div>
+  <div class="field"><label>지역</label><input name="region" placeholder="예: 의정부시"></div>
+  <div class="field"><label>소속 클럽</label><input name="club" placeholder="예: 위단테TV"></div>
+  <div class="field"><label>환불계좌 은행</label><input name="refund_bank" placeholder="예: 국민은행"></div>
+  <div class="field"><label>환불계좌 번호</label><input name="refund_account"></div>
+  <div class="field"><label>비밀번호</label><input type="password" name="password" required></div>
+  <button type="submit">가입하기</button>
+</form>
+{% endblock %}

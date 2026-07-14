@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<span class="eyebrow">Organizer home</span>
+<h1>주최자 메뉴</h1>
+
+<div class="card-row" style="margin-bottom:20px;">
+  <a class="btn" href="{{ url_for('new_tournament') }}">+ 새 대회 만들기</a>
+  <a class="btn secondary" href="{{ url_for('new_organizer') }}">+ 다른 주최자 카테고리 만들기</a>
+</div>
+
+<h2>내 대회 목록</h2>
+<div class="tournament-list">
+  {% for t in tournaments %}
+  <a class="tournament-item" href="{{ url_for('admin_dashboard', tid=t.id) }}">
+    <div>
+      <strong>{{ t.title }}</strong>
+      <div class="meta">{{ t.event_date }} · {{ t.location }}</div>
+    </div>
+    <span class="badge">{{ t.status }}</span>
+  </a>
+  {% else %}
+  <p>아직 만든 대회가 없습니다. 위 버튼으로 첫 대회를 만들어보세요.</p>
+  {% endfor %}
+</div>
+
+<h2>전체 주최자 카테고리 (멀티테넌트)</h2>
+<div class="group-grid">
+  {% for org in organizers %}
+  <a class="group-card" href="{{ url_for('organizer_page', slug=org.slug) }}" style="text-decoration:none;">
+    <h3>{{ org.name }}</h3>
+    <p style="font-size:13px;color:var(--ink-soft);margin:0;">/org/{{ org.slug }}</p>
+  </a>
+  {% endfor %}
+</div>
+{% endblock %}

@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% block content %}
+<span class="eyebrow">Organizer console</span>
+<h1>{{ t.title }} · 관리</h1>
+
+<h2>1. 예선 대진표 생성</h2>
+<div class="card">
+  <p style="font-size:13px;color:var(--ink-soft);">참가자를 선택하고 조를 생성하면 조별 라운드로빈 경기와 본선 빈 대진표가 자동으로 만들어집니다.</p>
+  <div style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:10px;margin:10px 0;">
+    {% for p in players %}
+    <label style="display:block;font-size:14px;padding:3px 0;">
+      <input type="checkbox" class="player-check" value="{{ p.id }}"> {{ p.name }} ({{ p.phone }})
+    </label>
+    {% endfor %}
+  </div>
+  <button onclick="generateDraw()">예선 대진표 생성</button>
+</div>
+
+<h2>2. 예선 경기 결과 입력</h2>
+<div class="card">
+  <div id="prelim-admin-list"></div>
+</div>
+
+<h2>3. 조별 우승자 확정 → 본선 자동 반영</h2>
+<div class="card">
+  {% for g in groups %}
+  <div class="card-row" style="margin-bottom:8px;">
+    <span>{{ g }}조 우승자</span>
+    <select id="group-winner-{{ g }}"></select>
+    <button class="secondary" onclick="setGroupWinner({{ g }})">확정</button>
+  </div>
+  {% else %}
+  <p>생성된 조가 없습니다.</p>
+  {% endfor %}
+</div>
+
+<h2>4. 본선 스코어 입력</h2>
+<div class="card">
+  <div id="main-admin-list"></div>
+</div>
+
+<h2>5. 예선 안내 문자 발송</h2>
+<div class="card">
+  <textarea id="sms-msg" rows="3" style="width:100%;padding:10px;border:1px solid var(--line);border-radius:4px;" placeholder="비워두면 기본 안내 문구가 발송됩니다."></textarea>
+  <div style="margin-top:10px;"><button class="clay" onclick="sendNotify()">체크된 참가자에게 문자 발송</button></div>
+  <p id="sms-result" style="font-size:13px;margin-top:8px;"></p>
+</div>
+
+<h2>6. 실시간 콜 현황</h2>
+<div id="call-feed">
+  {% for c in calls %}
+  <div class="call-feed-item {% if c.status == '처리완료' %}resolved{% endif %}" id="call-{{ c.id }}">
+    <span>[{{ c.created_at.strftime('%H:%M') }}] {{ c.user.name }} · {{ call_types.get(c.call_type, c.call_type) }}</span>
+    <button class="secondary" onclick="resolveCall({{ c.id }})">처리완료</button>
+  </div>
+  {% else %}
+  <p>접수된 콜이 없습니다.</p>
+  {% endfor %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const TID = {{ t.id }};
+const socket = io();
+socket.on("connect", () => socket.emit("join_tournament", {tournament_id: TID, as_admin: true}));
+socket.on("bracket_update", () => loadDraw());
+
+function checkedPlayers() {
+  return [...document.querySelectorAll(".player-check:checked")].map(c => parseInt(c.value));
+}
+
+function generateDraw() {
+  fetch(`/api/tournaments/${TID}/draw/generate`, {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({player_ids: checkedPlayers()})
+  }).then(r => r.json()).then(() => { alert("대진표가 생성되었습니다."); loadDraw(); });
+}
+
+function setGroupWinner(gno) {
+  const sel = document.getElementById(`group-winner-${gno}`);
+  fetch(`/api/tournaments/${TID}/groups/${gno}/winner`, {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({winner_id: parseInt(sel.value)})
+  }).then(r => r.json()).then(() => alert(`${gno}조 우승자가 본선에 반영되었습니다.`));
+}
+
+function sendNotify() {
+  fetch(`/api/tournaments/${TID}/notify`, {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({player_ids: checkedPlayers(), message: document.getElementById("sms-msg").value})
+  }).then(r => r.json()).then(d => {
+    document.getElementById("sms-result").innerText =
+      d.results.map(r => `${r.user}: ${r.success ? "발송성공" : "발송실패"}`).join(" / ");
+  });
+}
+
+function resolveCall(cid) {
+  fetch(`/api/calls/${cid}/resolve`, {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({status: "처리완료"})
+  }).then(() => document.getElementById(`call-${cid}`).classList.add("resolved"));
+}
+
+socket.on("new_call", (c) => {
+  const feed = document.getElementById("call-feed");
+  const div = document.createElement("div");
+  div.className = "call-feed-item";
+  div.id = `call-${c.id}`;
+  div.innerHTML = `<span>[${c.created_at}] ${c.player} · ${c.type}${c.court ? " · " + c.court + "코트" : ""}</span>
+    <button class="secondary" onclick="resolveCall(${c.id})">처리완료</button>`;
+  feed.prepend(div);
+});
+
+function loadDraw() {
+  fetch(`/api/tournaments/${TID}/draw`).then(r => r.json()).then(data => {
+    // 조별 우승자 셀렉트 채우기
+    {% for g in groups %}
+    fillGroupSelect({{ g }}, data.prelim.filter(m => m.group_no === {{ g }}));
+    {% endfor %}
+    renderPrelimAdmin(data.prelim);
+    renderMainAdmin(data.main);
+  });
+}
+
+function renderPrelimAdmin(matches) {
+  const groups = {};
+  matches.forEach(m => { (groups[m.group_no] ||= []).push(m); });
+  const el = document.getElementById("prelim-admin-list");
+  el.innerHTML = Object.entries(groups).map(([gno, ms]) => `
+    <div style="margin-bottom:14px;">
+      <strong style="font-family:var(--font-mono);color:var(--clay);">${gno}조</strong>
+      ${ms.map(m => `
+        <div class="card-row" style="border-bottom:1px solid var(--line);padding:6px 0;">
+          <span>${m.player1} vs ${m.player2}</span>
+          <span>
+            <input placeholder="6-3,6-4" id="pscore-${m.id}" style="width:90px;padding:5px;border:1px solid var(--line);border-radius:4px;" value="${m.score || ''}">
+            <button class="secondary" onclick="submitPrelimScore(${m.id}, ${m.player1_id})">${m.player1} 승</button>
+            <button class="secondary" onclick="submitPrelimScore(${m.id}, ${m.player2_id})">${m.player2} 승</button>
+          </span>
+        </div>`).join("")}
+    </div>`).join("") || "<p>예선 대진표가 아직 생성되지 않았습니다.</p>";
+}
+
+function submitPrelimScore(mid, winnerId) {
+  const score = document.getElementById(`pscore-${mid}`).value;
+  fetch(`/api/matches/${mid}/score`, {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({winner_id: winnerId, score})
+  }).then(r => r.json()).then(() => loadDraw());
+}
+
+function fillGroupSelect(gno, matches) {
+  const players = new Map();
+  matches.forEach(m => {
+    if (m.player1_id) players.set(m.player1_id, m.player1);
+    if (m.player2_id) players.set(m.player2_id, m.player2);
+  });
+  const sel = document.getElementById(`group-winner-${gno}`);
+  if (!sel) return;
+  sel.innerHTML = [...players.entries()].map(([id, n]) => `<option value="${id}">${n}</option>`).join("");
+}
+
+function renderMainAdmin(matches) {
+  const el = document.getElementById("main-admin-list");
+  el.innerHTML = matches.filter(m => m.player1_id && m.player2_id).map(m => `
+    <div class="card-row" style="border-bottom:1px solid var(--line);padding:8px 0;">
+      <span>${m.round_name} · ${m.player1} vs ${m.player2}</span>
+      <span>
+        <input placeholder="6-3,6-4" id="score-${m.id}" style="width:100px;padding:6px;border:1px solid var(--line);border-radius:4px;" value="${m.score || ''}">
+        <button class="secondary" onclick="submitScore(${m.id}, ${m.player1_id})">${m.player1} 승</button>
+        <button class="secondary" onclick="submitScore(${m.id}, ${m.player2_id})">${m.player2} 승</button>
+      </span>
+    </div>`).join("") || "<p>대진이 아직 채워지지 않았습니다.</p>";
+}
+
+function submitScore(mid, winnerId) {
+  const score = document.getElementById(`score-${mid}`).value;
+  fetch(`/api/matches/${mid}/score`, {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({winner_id: winnerId, score})
+  }).then(r => r.json()).then(() => loadDraw());
+}
+
+loadDraw();
+</script>
+{% endblock %}

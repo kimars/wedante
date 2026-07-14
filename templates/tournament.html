@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block content %}
+<span class="eyebrow">{{ t.event_date }} · {{ t.location }}</span>
+<h1>{{ t.title }}</h1>
+
+{% if current_user.is_authenticated %}
+<div class="card">
+  <strong>주최자에게 콜 보내기</strong>
+  <p style="font-size:13px;color:var(--ink-soft);margin:4px 0 0;">경기 중 문제가 있으면 버튼 한 번으로 알릴 수 있습니다.</p>
+  <div class="call-panel">
+    {% for key, label in call_types.items() %}
+    <div class="call-btn" onclick="sendCall('{{ key }}')">{{ label }}</div>
+    {% endfor %}
+  </div>
+  <p id="call-status" style="font-size:13px;color:var(--court-green-dark);margin-top:8px;"></p>
+</div>
+{% endif %}
+
+<h2>예선 (조별)</h2>
+<div id="prelim-groups" class="group-grid">
+  {% for gno, matches in groups.items() %}
+  <div class="group-card">
+    <h3>{{ gno }}조</h3>
+    {% for m in matches %}
+    <div class="match-row">
+      <span>{{ m.player1.name if m.player1 else '-' }} vs {{ m.player2.name if m.player2 else '-' }}</span>
+      <span class="score">{{ m.score or (m.status if m.status != '시작전' else '') }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p>아직 예선 대진표가 생성되지 않았습니다.</p>
+  {% endfor %}
+</div>
+
+<h2>본선</h2>
+<div id="main-bracket" class="bracket"></div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const TID = {{ t.id }};
+const socket = io();
+socket.on("connect", () => socket.emit("join_tournament", {tournament_id: TID}));
+socket.on("bracket_update", () => loadDraw());
+
+function sendCall(type) {
+  fetch(`/api/tournaments/${TID}/call`, {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({call_type: type})
+  }).then(r => r.json()).then(() => {
+    document.getElementById("call-status").innerText = "주최자에게 전달되었습니다.";
+  });
+}
+
+function loadDraw() {
+  fetch(`/api/tournaments/${TID}/draw`).then(r => r.json()).then(data => {
+    renderPrelim(data.prelim);
+    renderMain(data.main);
+  });
+}
+
+function renderPrelim(matches) {
+  const groups = {};
+  matches.forEach(m => { (groups[m.group_no] ||= []).push(m); });
+  const el = document.getElementById("prelim-groups");
+  if (Object.keys(groups).length === 0) return; // 서버 렌더된 안내 문구 유지
+  el.innerHTML = Object.entries(groups).map(([gno, ms]) => `
+    <div class="group-card">
+      <h3>${gno}조</h3>
+      ${ms.map(m => `
+        <div class="match-row">
+          <span>${m.player1 || '-'} vs ${m.player2 || '-'}</span>
+          <span class="score">${m.score || (m.status !== '시작전' ? m.status : '')}</span>
+        </div>`).join("")}
+    </div>`).join("");
+}
+
+function renderMain(matches) {
+  const rounds = {};
+  matches.forEach(m => { (rounds[m.round_name] ||= []).push(m); });
+  const el = document.getElementById("main-bracket");
+  el.innerHTML = "";
+  Object.entries(rounds).forEach(([rname, ms]) => {
+    const col = document.createElement("div");
+    col.className = "bracket-round";
+    col.innerHTML = `<div class="round-label">${rname}</div>` + ms.sort((a,b)=>a.match_no-b.match_no).map(m => `
+      <div class="bracket-match ${m.status === '종료' ? 'done' : ''}">
+        <div class="p ${m.winner_id && m.player1 ? 'win' : ''}">${m.player1 || '-'}</div>
+        <div class="p ${m.winner_id && m.player2 ? 'win' : ''}">${m.player2 || '-'}</div>
+        ${m.score ? `<div style="font-size:11px;color:var(--ink-soft);margin-top:4px;">${m.score}</div>` : ""}
+      </div>`).join("");
+    el.appendChild(col);
+  });
+}
+loadDraw();
+</script>
+{% endblock %}

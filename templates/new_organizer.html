@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<span class="eyebrow">Multi-tenant onboarding</span>
+<h1>다른 주최자 카테고리 만들기</h1>
+<p style="max-width:440px;color:var(--ink-soft);font-size:14px;">
+  타 주최자가 위단테를 사용할 수 있도록 메인화면에 노출될 독립 카테고리를 만듭니다.
+  생성과 동시에 그 주최자가 로그인해서 자기 대회만 관리할 수 있는 관리자 계정도 함께 만들어집니다.
+</p>
+<form class="panel" method="post">
+  <div class="field"><label>카테고리(업체) 이름</label><input name="name" placeholder="예: OO테니스아카데미" required></div>
+  <div class="field"><label>URL 주소 (영문/숫자)</label><input name="slug" placeholder="예: oo-tennis" required></div>
+  <div class="field"><label>연락처</label><input name="contact_phone"></div>
+  <hr style="border:none;border-top:1px solid var(--line);margin:18px 0;">
+  <div class="field"><label>담당자 이름</label><input name="admin_name" required></div>
+  <div class="field"><label>담당자 전화번호 (로그인 ID)</label><input name="admin_phone" required></div>
+  <div class="field"><label>초기 비밀번호</label><input type="password" name="admin_password" required></div>
+  <button type="submit">카테고리 생성</button>
+</form>
+{% endblock %}

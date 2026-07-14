@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <span class="eyebrow">Real-time bracket</span>
+  <h1>위단테 실시간 대진표</h1>
+  <p>예선 결과가 본선 대진표에 자동으로 반영됩니다. 대회를 선택해 실시간 진행 상황을 확인하세요.</p>
+</section>
+
+{% if active_org %}
+<h2>{{ active_org.name }} 대회 목록</h2>
+{% else %}
+<h2>진행 중인 대회</h2>
+{% endif %}
+
+<div class="tournament-list">
+  {% for t in tournaments %}
+  <a class="tournament-item" href="{{ url_for('tournament_page', tid=t.id) }}">
+    <div>
+      <strong>{{ t.title }}</strong>
+      <div class="meta">{{ t.event_date }} · {{ t.location }} · 참가비 {{ "{:,}".format(t.entry_fee) }}원</div>
+    </div>
+    <span class="badge {% if t.status == '접수마감' %}closed{% endif %}">{{ t.status }}</span>
+  </a>
+  {% else %}
+  <p>등록된 대회가 없습니다.</p>
+  {% endfor %}
+</div>
+
+{% if not active_org %}
+<h2>주최자 카테고리</h2>
+<div class="group-grid">
+  {% for org in organizers %}
+  <a class="group-card" href="{{ url_for('organizer_page', slug=org.slug) }}" style="text-decoration:none;">
+    <h3>{{ org.name }}</h3>
+    <p style="font-size:13px;color:var(--ink-soft);margin:0;">/org/{{ org.slug }}</p>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
