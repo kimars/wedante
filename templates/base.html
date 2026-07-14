@@ -35,11 +35,14 @@
 {% block content %}{% endblock %}
 </main>
 
+<div id="toast-stack"></div>
+
 <footer class="site-footer">
   <p>매 경기 후 즉시 결과 보고 → 010-6890-9123 · www.wedante.com</p>
 </footer>
 
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="{{ url_for('static', filename='js/toast.js') }}"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

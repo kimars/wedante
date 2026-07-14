@@ -71,35 +71,50 @@ function checkedPlayers() {
 }
 
 function generateDraw() {
-  fetch(`/api/tournaments/${TID}/draw/generate`, {
-    method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({player_ids: checkedPlayers()})
-  }).then(r => r.json()).then(() => { alert("대진표가 생성되었습니다."); loadDraw(); });
+  const btn = event.target;
+  withLoading(btn, () =>
+    fetch(`/api/tournaments/${TID}/draw/generate`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({player_ids: checkedPlayers()})
+    }).then(r => r.json()).then(() => { toast("대진표가 생성되었습니다.", "success"); loadDraw(); })
+      .catch(() => toast("생성에 실패했습니다.", "error"))
+  );
 }
 
 function setGroupWinner(gno) {
   const sel = document.getElementById(`group-winner-${gno}`);
-  fetch(`/api/tournaments/${TID}/groups/${gno}/winner`, {
-    method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({winner_id: parseInt(sel.value)})
-  }).then(r => r.json()).then(() => alert(`${gno}조 우승자가 본선에 반영되었습니다.`));
+  const btn = event.target;
+  withLoading(btn, () =>
+    fetch(`/api/tournaments/${TID}/groups/${gno}/winner`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({winner_id: parseInt(sel.value)})
+    }).then(r => r.json()).then(() => { toast(`${gno}조 우승자가 본선에 반영되었습니다.`, "success"); loadDraw(); })
+      .catch(() => toast("반영에 실패했습니다.", "error"))
+  );
 }
 
 function sendNotify() {
-  fetch(`/api/tournaments/${TID}/notify`, {
-    method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({player_ids: checkedPlayers(), message: document.getElementById("sms-msg").value})
-  }).then(r => r.json()).then(d => {
-    document.getElementById("sms-result").innerText =
-      d.results.map(r => `${r.user}: ${r.success ? "발송성공" : "발송실패"}`).join(" / ");
-  });
+  const btn = event.target;
+  withLoading(btn, () =>
+    fetch(`/api/tournaments/${TID}/notify`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({player_ids: checkedPlayers(), message: document.getElementById("sms-msg").value})
+    }).then(r => r.json()).then(d => {
+      document.getElementById("sms-result").innerText =
+        d.results.map(r => `${r.user}: ${r.success ? "발송성공" : "발송실패"}`).join(" / ");
+      toast("문자 발송을 완료했습니다.", "success");
+    }).catch(() => toast("발송에 실패했습니다.", "error"))
+  );
 }
 
 function resolveCall(cid) {
   fetch(`/api/calls/${cid}/resolve`, {
     method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({status: "처리완료"})
-  }).then(() => document.getElementById(`call-${cid}`).classList.add("resolved"));
+  }).then(() => {
+    document.getElementById(`call-${cid}`).classList.add("resolved");
+    toast("콜을 처리완료로 표시했습니다.", "success");
+  });
 }
 
 socket.on("new_call", (c) => {
@@ -147,7 +162,8 @@ function submitPrelimScore(mid, winnerId) {
   fetch(`/api/matches/${mid}/score`, {
     method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({winner_id: winnerId, score})
-  }).then(r => r.json()).then(() => loadDraw());
+  }).then(r => r.json()).then(() => { toast("경기 결과가 저장되었습니다.", "success"); loadDraw(); })
+    .catch(() => toast("저장에 실패했습니다.", "error"));
 }
 
 function fillGroupSelect(gno, matches) {
@@ -179,7 +195,8 @@ function submitScore(mid, winnerId) {
   fetch(`/api/matches/${mid}/score`, {
     method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({winner_id: winnerId, score})
-  }).then(r => r.json()).then(() => loadDraw());
+  }).then(r => r.json()).then(() => { toast("경기 결과가 저장되었습니다.", "success"); loadDraw(); })
+    .catch(() => toast("저장에 실패했습니다.", "error"));
 }
 
 loadDraw();

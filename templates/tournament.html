@@ -50,8 +50,8 @@ function sendCall(type) {
     method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({call_type: type})
   }).then(r => r.json()).then(() => {
-    document.getElementById("call-status").innerText = "주최자에게 전달되었습니다.";
-  });
+    toast("주최자에게 전달되었습니다.", "success");
+  }).catch(() => toast("전송에 실패했습니다. 다시 시도해주세요.", "error"));
 }
 
 function loadDraw() {
