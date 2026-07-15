@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}내 정보 · 위단테{% endblock %}
+{% block content %}
+<span class="eyebrow">My page</span>
+<h1>{{ current_user.name }}님</h1>
+
+<div class="card">
+  <strong>내 정보</strong>
+  <form method="post" style="margin-top:14px;display:grid;gap:12px;">
+    <label>이름
+      <input name="name" value="{{ current_user.name }}" required style="width:100%;padding:10px;border:1px solid var(--border-strong);border-radius:8px;">
+    </label>
+    <label>전화번호 (변경 불가)
+      <input value="{{ current_user.phone }}" disabled style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);">
+    </label>
+    <label>지역
+      <input name="region" value="{{ current_user.region or '' }}" style="width:100%;padding:10px;border:1px solid var(--border-strong);border-radius:8px;">
+    </label>
+    <label>소속 클럽
+      <input name="club" value="{{ current_user.club or '' }}" style="width:100%;padding:10px;border:1px solid var(--border-strong);border-radius:8px;">
+    </label>
+    <label>환불 계좌 은행
+      <input name="refund_bank" value="{{ current_user.refund_bank or '' }}" placeholder="예: 카카오뱅크" style="width:100%;padding:10px;border:1px solid var(--border-strong);border-radius:8px;">
+    </label>
+    <label>환불 계좌번호
+      <input name="refund_account" value="{{ current_user.refund_account or '' }}" placeholder="계좌번호 - 없이" style="width:100%;padding:10px;border:1px solid var(--border-strong);border-radius:8px;">
+    </label>
+    <label>새 비밀번호 (변경 시에만 입력)
+      <input type="password" name="new_password" placeholder="변경하지 않으려면 비워두세요" style="width:100%;padding:10px;border:1px solid var(--border-strong);border-radius:8px;">
+    </label>
+    <div style="margin-top:6px;">
+      <button type="submit">저장</button>
+    </div>
+  </form>
+</div>
+
+<h2>내 대회 참가 이력</h2>
+<div class="card">
+  {% if my_parts %}
+    {% for p in my_parts %}
+    <div class="card-row" style="border-bottom:1px solid var(--border);padding:10px 0;">
+      <span>
+        <a href="{{ url_for('tournament_page', tid=p.tournament.id) }}"><strong>{{ p.tournament.title }}</strong></a>
+        <span style="color:var(--ink-faint);font-size:13px;"> · {{ p.tournament.event_date }} · {{ p.tournament.location or '' }}</span>
+      </span>
+      <span class="badge {% if p.status == '확정' %}live{% elif p.status == '대기' %}closed{% endif %}">{{ p.status }}</span>
+    </div>
+    {% endfor %}
+  {% else %}
+    <p style="color:var(--ink-faint);margin:0;">아직 참가 신청한 대회가 없습니다.</p>
+  {% endif %}
+</div>
+
+{% if current_user.is_superadmin %}
+<h2 id="permissions">대회 생성 권한 부여 (최고 관리자 전용)</h2>
+<div class="card">
+  <p style="font-size:13px;color:var(--ink-soft);">부여된 회원은 본인이 만든 대회만 관리할 수 있고, 배너/아이콘/타인의 대회는 건들 수 없습니다.</p>
+  <div style="max-height:400px;overflow:auto;">
+    {% for u in granting_users %}
+    <div class="card-row" style="border-bottom:1px solid var(--border);padding:8px 0;">
+      <span>
+        {{ u.name }} ({{ u.phone }})
+        {% if u.is_superadmin %}<span class="badge live">최고 관리자</span>{% endif %}
+      </span>
+      <span>
+        {% if u.is_superadmin %}
+        <span style="color:var(--ink-faint);font-size:12px;">모든 권한 보유</span>
+        {% else %}
+        <button class="secondary" onclick="togglePerm({{ u.id }}, {{ 'false' if u.can_create_tournament else 'true' }})">
+          {% if u.can_create_tournament %}권한 회수{% else %}대회 생성 권한 부여{% endif %}
+        </button>
+        {% endif %}
+      </span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+{% block scripts %}
+<script>
+function togglePerm(uid, grant) {
+  apiPost(`/api/users/${uid}/tournament-permission`, {can_create_tournament: grant})
+    .then(() => { toast(grant ? "권한을 부여했습니다." : "권한을 회수했습니다.", "success"); setTimeout(() => location.reload(), 600); })
+    .catch(err => toast(err.message, "error"));
+}
+</script>
+{% endblock %}

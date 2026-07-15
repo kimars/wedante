@@ -3,11 +3,15 @@
 <span class="eyebrow">Organizer home</span>
 <h1>주최자 메뉴</h1>
 
-<div class="card-row" style="margin-bottom:20px;">
+<div class="card-row" style="margin-bottom:20px;flex-wrap:wrap;">
+  {% if current_user.is_superadmin or current_user.can_create_tournament %}
   <a class="btn" href="{{ url_for('new_tournament') }}">+ 새 대회 만들기</a>
-  <a class="btn secondary" href="{{ url_for('new_organizer') }}">+ 다른 주최자 카테고리 만들기</a>
+  {% endif %}
   {% if current_user.is_superadmin %}
+  <a class="btn secondary" href="{{ url_for('new_organizer') }}">+ 다른 주최자 카테고리 만들기</a>
   <a class="btn secondary" href="{{ url_for('admin_banners') }}">★ 홈 배너 관리</a>
+  <a class="btn secondary" href="{{ url_for('admin_icons') }}">★ 아이콘 관리</a>
+  <a class="btn secondary" href="{{ url_for('profile') }}#permissions">🔑 대회 생성 권한 부여</a>
   {% endif %}
 </div>
 
@@ -22,10 +26,11 @@
     <span class="badge">{{ t.status }}</span>
   </a>
   {% else %}
-  <p>아직 만든 대회가 없습니다. 위 버튼으로 첫 대회를 만들어보세요.</p>
+  <p>아직 만든 대회가 없습니다. {% if current_user.is_superadmin or current_user.can_create_tournament %}위 버튼으로 첫 대회를 만들어보세요.{% else %}대회를 만들려면 최고 관리자에게 대회 생성 권한을 요청하세요.{% endif %}</p>
   {% endfor %}
 </div>
 
+{% if current_user.is_superadmin and organizers %}
 <h2>전체 주최자 카테고리 (멀티테넌트)</h2>
 <div class="group-grid">
   {% for org in organizers %}
@@ -35,4 +40,5 @@
   </a>
   {% endfor %}
 </div>
+{% endif %}
 {% endblock %}

@@ -5,13 +5,16 @@
 
 <div class="card card-row">
   <span><strong>대회 상태</strong> — 현재: <span class="badge {% if t.status in ['접수마감','종료'] %}closed{% elif t.status == '진행중' %}live{% endif %}">{{ t.status }}</span></span>
-  <span style="display:flex;gap:8px;">
+  <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
     <select id="status-select">
       {% for s in ['접수중','접수마감','진행중','종료'] %}
       <option value="{{ s }}" {% if t.status == s %}selected{% endif %}>{{ s }}</option>
       {% endfor %}
     </select>
     <button class="secondary" onclick="updateStatus()">상태 변경</button>
+    {% if can_delete %}
+    <button class="clay" style="background:#e33;color:#fff;border-color:#e33;" onclick="deleteTournament()">🗑 대회 삭제</button>
+    {% endif %}
   </span>
 </div>
 
@@ -20,10 +23,21 @@
   <p style="font-size:13px;color:var(--ink-soft);">참가자를 선택하고 조를 생성하면 조별 라운드로빈 경기와 본선 빈 대진표가 자동으로 만들어집니다.</p>
   <div style="max-height:180px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:10px;margin:10px 0;">
     {% for p in players %}
-    <label style="display:block;font-size:14px;padding:3px 0;">
-      <input type="checkbox" class="player-check" value="{{ p.id }}" {% if p.id in confirmed_ids %}checked{% endif %}> {{ p.name }} ({{ p.phone }}){% if p.id in confirmed_ids %} <span style="color:var(--primary);font-size:12px;">· 신청확정</span>{% endif %}
+    <label style="display:flex;align-items:center;font-size:14px;padding:3px 0;gap:8px;">
+      <input type="checkbox" class="player-check" value="{{ p.id }}" {% if p.id in confirmed_ids %}checked{% endif %} onchange="onPlayerToggle()">
+      <span style="flex:1;">{{ p.name }} ({{ p.phone }}){% if p.id in confirmed_ids %} <span style="color:var(--primary);font-size:12px;">· 신청확정</span>{% endif %}</span>
+      <select class="player-group" data-uid="{{ p.id }}" style="display:none;font-size:12px;padding:3px 6px;border:1px solid var(--border-strong);border-radius:6px;">
+        <option value="">자동</option>
+      </select>
     </label>
     {% endfor %}
+  </div>
+  <div class="card-row" style="margin:8px 0;">
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;">
+      <input type="checkbox" id="manual-mode" onchange="toggleManualMode()">
+      <span>수동 조 편성 (선수마다 조를 직접 지정)</span>
+    </label>
+    <span id="manual-hint" style="font-size:12px;color:var(--ink-faint);display:none;">체크된 선수 옆의 드롭다운에서 조 번호를 골라주세요.</span>
   </div>
   <button onclick="generateDraw()">예선 대진표 생성</button>
 </div>
@@ -100,11 +114,67 @@ function checkedPlayers() {
   return [...document.querySelectorAll(".player-check:checked")].map(c => parseInt(c.value));
 }
 
+// 수동 조 편성 모드 관련
+function toggleManualMode() {
+  const on = document.getElementById("manual-mode").checked;
+  document.getElementById("manual-hint").style.display = on ? "" : "none";
+  document.querySelectorAll(".player-group").forEach(sel => {
+    sel.style.display = on ? "" : "none";
+  });
+  if (on) refreshManualSelects();
+}
+function onPlayerToggle() {
+  if (document.getElementById("manual-mode").checked) refreshManualSelects();
+}
+function refreshManualSelects() {
+  // 체크된 선수 수에 맞춰 조 옵션 갱신 (예: 6명 = 최대 6조까지 선택 가능)
+  const count = checkedPlayers().length;
+  const maxGroups = Math.max(1, count);
+  document.querySelectorAll(".player-group").forEach(sel => {
+    const uid = sel.dataset.uid;
+    const cb = document.querySelector(`.player-check[value="${uid}"]`);
+    if (!cb.checked) { sel.style.display = "none"; return; }
+    sel.style.display = "";
+    const current = sel.value;
+    let html = '<option value="">-- 조 선택 --</option>';
+    for (let i = 1; i <= maxGroups; i++) html += `<option value="${i}">${i}조</option>`;
+    sel.innerHTML = html;
+    if (current) sel.value = current;
+  });
+}
+
+function collectManualGroups() {
+  const groups = {};
+  document.querySelectorAll(".player-check:checked").forEach(cb => {
+    const sel = document.querySelector(`.player-group[data-uid="${cb.value}"]`);
+    const g = sel && sel.value ? parseInt(sel.value) : null;
+    if (!g) return;
+    (groups[g] ||= []).push(parseInt(cb.value));
+  });
+  const groupNums = Object.keys(groups).map(Number).sort((a, b) => a - b);
+  return groupNums.map(g => groups[g]);
+}
+
 function updateStatus() {
   const status = document.getElementById("status-select").value;
   apiPost(`/api/tournaments/${TID}/status`, {status})
     .then(() => { toast("대회 상태가 변경되었습니다.", "success"); setTimeout(() => location.reload(), 600); })
     .catch((err) => toast(err.message, "error"));
+}
+
+function deleteTournament() {
+  const confirmText = "이 대회를 완전히 삭제하시겠습니까? 참가자, 대진표, 환불 채팅 등 관련된 모든 데이터가 함께 삭제되며 되돌릴 수 없습니다.";
+  if (!confirm(confirmText)) return;
+  const again = prompt('삭제를 확인하려면 대회 이름을 그대로 입력해주세요:\n\n"{{ t.title }}"');
+  if (again !== "{{ t.title }}") { toast("이름이 일치하지 않아 삭제를 취소했습니다.", "error"); return; }
+  fetch(`/api/tournaments/${TID}`, {method: "DELETE", headers: {"Content-Type": "application/json"}})
+    .then(r => r.json().then(d => ({ok: r.ok, d})))
+    .then(({ok, d}) => {
+      if (!ok) throw new Error(d.error || "삭제 실패");
+      toast("대회가 삭제되었습니다.", "success");
+      setTimeout(() => location.href = "/admin", 700);
+    })
+    .catch(err => toast(err.message, "error"));
 }
 
 function confirmParticipant(pid) {
@@ -117,8 +187,21 @@ function generateDraw() {
   const btn = event.target;
   const ids = checkedPlayers();
   if (ids.length < 2) { toast("참가자를 2명 이상 체크해주세요.", "error"); return; }
+  const manualMode = document.getElementById("manual-mode").checked;
+  let body = {player_ids: ids};
+  if (manualMode) {
+    const manual = collectManualGroups();
+    // 수동모드에서 조가 지정되지 않은 선수가 있는지 확인
+    const assigned = manual.flat();
+    const missing = ids.filter(id => !assigned.includes(id));
+    if (missing.length) { toast("모든 체크된 선수에게 조를 지정해주세요.", "error"); return; }
+    if (manual.length === 0) { toast("최소 1개의 조가 필요합니다.", "error"); return; }
+    body.manual_groups = manual;
+  }
+  const confirmMsg = "기존 대진표와 조 우승자 반영 결과가 초기화됩니다. 진행하시겠습니까?";
+  if (document.querySelector("#prelim-admin-list div") && !confirm(confirmMsg)) return;
   withLoading(btn, () =>
-    apiPost(`/api/tournaments/${TID}/draw/generate`, {player_ids: ids})
+    apiPost(`/api/tournaments/${TID}/draw/generate`, body)
       .then(() => { toast("대진표가 생성되었습니다.", "success"); loadDraw(); })
       .catch((err) => toast(err.message, "error"))
   );

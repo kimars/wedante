@@ -3,6 +3,18 @@
 <span class="eyebrow">{{ t.event_date }} · {{ t.location }}</span>
 <h1>{{ t.title }}</h1>
 
+{% if is_manager %}
+<div class="admin-view-bar">
+  <div>
+    <span class="badge-admin">관리자 모드</span>
+    <span style="margin-left:10px;font-size:14px;">이 대회의 관리자 계정으로 접속 중입니다.</span>
+  </div>
+  <div style="display:flex;gap:8px;">
+    <a class="btn secondary" href="{{ url_for('admin_dashboard', tid=t.id) }}">🛠 관리 대시보드로</a>
+  </div>
+</div>
+{% endif %}
+
 <div class="quick-links">
   {% if t.parking_url %}<a class="quick-link" href="{{ t.parking_url }}" target="_blank" rel="noopener">🅿️ 주차등록</a>{% endif %}
   {% if t.organizer and t.organizer.band_url %}<a class="quick-link" href="{{ t.organizer.band_url }}" target="_blank" rel="noopener">💬 위단테 밴드</a>{% endif %}
@@ -10,7 +22,7 @@
   <a class="quick-link" href="tel:010-6890-9123">📞 결과보고/본부요청 010-6890-9123</a>
 </div>
 
-{% if not current_user.is_admin %}
+{% if not is_manager %}
 <div class="card" id="apply-card">
   <div class="card-row">
     <div>
@@ -118,9 +130,29 @@
 {% block scripts %}
 <script>
 const TID = {{ t.id }};
+const IS_MANAGER = {{ 'true' if is_manager else 'false' }};
 const socket = io();
 socket.on("connect", () => socket.emit("join_tournament", {tournament_id: TID}));
 socket.on("bracket_update", () => loadDraw());
+
+// 관리자 계정이 대회 페이지에 있을 때는 콜 알림을 실시간으로 받는다
+if (IS_MANAGER) {
+  socket.on("call_alert", (c) => {
+    const div = document.createElement("div");
+    div.className = "call-alert-toast";
+    div.innerHTML = `🔔 <strong>${c.player}</strong> · ${c.type}${c.court ? " · " + c.court + "코트" : ""}<br><span style="font-size:12px;opacity:.9;">[${c.created_at}] 관리 대시보드에서 처리해주세요.</span>`;
+    document.body.appendChild(div);
+    setTimeout(() => div.remove(), 8000);
+    // 사용자 상호작용 이후엔 Notification API도 시도
+    if (window.Notification && Notification.permission === "granted") {
+      new Notification("위단테 콜", { body: `${c.player} · ${c.type}` });
+    }
+  });
+  // 페이지 진입 시 알림 권한 자동 요청 (거절돼도 무방)
+  if (window.Notification && Notification.permission === "default") {
+    setTimeout(() => Notification.requestPermission(), 3000);
+  }
+}
 
 function sendCall(type) {
   apiPost(`/api/tournaments/${TID}/call`, {call_type: type})

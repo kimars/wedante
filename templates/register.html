@@ -2,14 +2,82 @@
 {% block content %}
 <span class="eyebrow">Sign up</span>
 <h1>회원가입</h1>
-<form class="panel" method="post">
+<form class="panel" method="post" id="signup-form">
   <div class="field"><label>이름 (실명)</label><input name="name" required></div>
-  <div class="field"><label>전화번호</label><input name="phone" placeholder="01012345678" required></div>
+
+  <div class="field">
+    <label>전화번호</label>
+    <div style="display:flex;gap:8px;">
+      <input name="phone" id="phone-input" placeholder="01012345678" required style="flex:1;">
+      <button type="button" class="secondary" id="btn-send-code" onclick="sendCode()">인증번호 발송</button>
+    </div>
+    <p id="phone-status" style="font-size:12px;color:var(--ink-faint);margin:6px 0 0;"></p>
+  </div>
+
+  <div class="field" id="code-row" style="display:none;">
+    <label>인증번호 (6자리, 5분 유효)</label>
+    <div style="display:flex;gap:8px;">
+      <input id="code-input" placeholder="6자리 숫자" style="flex:1;font-family:var(--font-mono);letter-spacing:4px;">
+      <button type="button" class="secondary" onclick="verifyCode()">확인</button>
+    </div>
+    <p id="verify-status" style="font-size:12px;margin:6px 0 0;"></p>
+  </div>
+
   <div class="field"><label>지역</label><input name="region" placeholder="예: 의정부시"></div>
   <div class="field"><label>소속 클럽</label><input name="club" placeholder="예: 위단테TV"></div>
   <div class="field"><label>환불계좌 은행</label><input name="refund_bank" placeholder="예: 국민은행"></div>
   <div class="field"><label>환불계좌 번호</label><input name="refund_account"></div>
   <div class="field"><label>비밀번호</label><input type="password" name="password" required></div>
-  <button type="submit">가입하기</button>
+  <button type="submit" id="btn-submit" disabled title="전화번호 인증이 필요합니다">가입하기</button>
 </form>
+{% endblock %}
+{% block scripts %}
+<script>
+let verified = false;
+
+function sendCode() {
+  const phone = document.getElementById("phone-input").value.replace(/\D/g, "");
+  if (phone.length < 10) { toast("전화번호를 정확히 입력해주세요.", "error"); return; }
+  const btn = document.getElementById("btn-send-code");
+  btn.disabled = true; btn.innerText = "전송 중...";
+  apiPost("/api/phone/send-code", {phone})
+    .then(d => {
+      document.getElementById("code-row").style.display = "";
+      document.getElementById("phone-status").innerText = d.delivered
+        ? "인증번호를 발송했습니다. 문자를 확인해주세요."
+        : "발송 대기 (SMS API 미설정 시 서버 콘솔 로그로 확인).";
+      toast("인증번호가 발송되었습니다.", "success");
+      let secs = 45;
+      const t = setInterval(() => {
+        secs--;
+        if (secs <= 0) { clearInterval(t); btn.disabled = false; btn.innerText = "인증번호 재발송"; }
+        else { btn.innerText = `재발송 (${secs}s)`; }
+      }, 1000);
+    })
+    .catch(err => { btn.disabled = false; btn.innerText = "인증번호 발송"; toast(err.message, "error"); });
+}
+
+function verifyCode() {
+  const phone = document.getElementById("phone-input").value.replace(/\D/g, "");
+  const code = document.getElementById("code-input").value.trim();
+  if (!code) { toast("인증번호를 입력해주세요.", "error"); return; }
+  apiPost("/api/phone/verify", {phone, code})
+    .then(() => {
+      verified = true;
+      document.getElementById("verify-status").innerHTML = '<span style="color:var(--primary);font-weight:600;">✓ 인증 완료</span>';
+      document.getElementById("phone-input").readOnly = true;
+      document.getElementById("btn-submit").disabled = false;
+      document.getElementById("btn-submit").removeAttribute("title");
+      toast("전화번호 인증이 완료되었습니다.", "success");
+    })
+    .catch(err => {
+      document.getElementById("verify-status").innerHTML = `<span style="color:var(--coral,#e33);">${err.message}</span>`;
+      toast(err.message, "error");
+    });
+}
+
+document.getElementById("signup-form").addEventListener("submit", (e) => {
+  if (!verified) { e.preventDefault(); toast("전화번호 인증을 먼저 완료해주세요.", "error"); }
+});
+</script>
 {% endblock %}

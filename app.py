@@ -2,17 +2,19 @@ import os
 import math
 import random
 import uuid
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from calendar import Calendar
 
-from flask import Flask, render_template, request, redirect, url_for, jsonify, flash, abort
+from flask import Flask, render_template, request, redirect, url_for, jsonify, flash, abort, session
 from flask_login import (LoginManager, login_user, logout_user, login_required,
                           current_user, UserMixin)
 from flask_socketio import SocketIO, emit, join_room
+from sqlalchemy.orm import joinedload
+from sqlalchemy import inspect as sqla_inspect, text
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 
-from models import db, Organizer, User, Tournament, TournamentParticipant, RefundRequest, RefundMessage, Match, CallLog, SmsLog, Banner, QuickIcon, CALL_TYPES
+from models import db, Organizer, User, Tournament, TournamentParticipant, RefundRequest, RefundMessage, Match, CallLog, SmsLog, Banner, QuickIcon, PhoneVerification, CALL_TYPES
 from sms import send_sms
 
 load_dotenv()
@@ -39,9 +41,62 @@ login_manager = LoginManager(app)
 login_manager.login_view = "login"
 
 
+def _apply_lightweight_migrations():
+    """가벼운 인라인 마이그레이션.
+    새로 추가된 컬럼을 기존 DB에 안전하게 ADD COLUMN 한다.
+    (Postgres/SQLite 모두에서 idempotent 하게 동작하도록 컬럼 존재 여부를 먼저 확인)"""
+    # 신규 컬럼 목록: (테이블, 컬럼명, 타입 스펠링)
+    columns_to_add = [
+        ("users", "can_create_tournament", "BOOLEAN DEFAULT FALSE"),
+        ("users", "phone_verified", "BOOLEAN DEFAULT FALSE"),
+        ("tournaments", "created_by_id", "INTEGER"),
+    ]
+    try:
+        insp = sqla_inspect(db.engine)
+        with db.engine.begin() as conn:
+            for table, col, coltype in columns_to_add:
+                if not insp.has_table(table):
+                    continue
+                existing = {c["name"] for c in insp.get_columns(table)}
+                if col in existing:
+                    continue
+                # 컬럼 이름/타입은 상수만 사용하므로 SQL 인젝션 위험 없음
+                conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {col} {coltype}'))
+                app.logger.info(f"[migration] added column {table}.{col}")
+    except Exception:
+        # 마이그레이션은 실패해도 앱 부팅을 막지 않는다 (기록만 남김)
+        app.logger.exception("lightweight migration failed")
+
+
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
+
+
+# ---------------------------------------------------------------------------
+# 권한 헬퍼
+# ---------------------------------------------------------------------------
+
+def can_manage_tournament(user, tournament):
+    """이 사용자가 이 대회를 관리(수정/대진표/참가자/문자 등)할 수 있는가.
+    - 최고 관리자는 모두 가능
+    - 대회 생성자는 자신의 대회를 관리 가능
+    - 예전 대회(created_by_id 없음)는 하위호환으로 같은 organizer 소속 admin 이면 허용"""
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superadmin:
+        return True
+    if tournament.created_by_id and tournament.created_by_id == user.id:
+        return True
+    # 하위호환: 생성자 정보가 없는 예전 대회는 organizer 소속 admin 이 관리 가능
+    if not tournament.created_by_id and user.is_admin and user.organizer_id == tournament.organizer_id:
+        return True
+    return False
+
+
+def can_delete_tournament(user, tournament):
+    """대회 삭제는 최고 관리자 전용."""
+    return bool(user and user.is_authenticated and user.is_superadmin)
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +216,26 @@ def record_group_winner(tournament: Tournament, group_no: int, winner_id: int):
                    room=f"tournament_{tournament.id}")
 
 
+def generate_manual_groups(tournament: Tournament, manual_groups: list[list[int]]):
+    """관리자가 조 구성을 직접 지정한 경우의 대진표 생성.
+    manual_groups: [[선수id, 선수id, ...], [...], ...]  각 원소가 하나의 조.
+    generate_prelim_groups 와 동일한 규칙으로 조 내 라운드로빈 + 본선 슬롯 자동 배치."""
+    if not manual_groups:
+        return []
+    build_main_bracket(tournament.id, len(manual_groups))
+    for gi, group in enumerate(manual_groups, start=1):
+        if len(group) == 1:
+            _set_group_winner_slot(tournament.id, gi, group[0])
+            continue
+        for a in range(len(group)):
+            for b in range(a + 1, len(group)):
+                m = Match(tournament_id=tournament.id, stage="prelim", group_no=gi,
+                          player1_id=group[a], player2_id=group[b], status="시작전")
+                db.session.add(m)
+    db.session.commit()
+    return manual_groups
+
+
 def advance_winner(match: Match):
     """본선 경기 승자를 다음 라운드 매치에 자동으로 채워 넣는다"""
     if match.next_match_id and match.winner_id:
@@ -199,19 +274,122 @@ def organizer_page(slug):
 def register():
     if request.method == "POST":
         f = request.form
-        if User.query.filter_by(phone=f["phone"]).first():
+        phone = (f.get("phone") or "").strip()
+        if User.query.filter_by(phone=phone).first():
             flash("이미 가입된 전화번호입니다.")
             return redirect(url_for("register"))
-        u = User(name=f["name"], phone=f["phone"], region=f.get("region"),
+        # 전화번호 SMS 인증 확인
+        # 클라이언트가 /api/verify-phone 을 성공적으로 호출했다면 세션에 verified_phone 이 세팅되어 있음
+        verified_phone = session.get("verified_phone")
+        if verified_phone != phone:
+            flash("전화번호 인증을 완료해주세요.")
+            return redirect(url_for("register"))
+        u = User(name=f["name"], phone=phone, region=f.get("region"),
                   club=f.get("club"), refund_bank=f.get("refund_bank"),
-                  refund_account=f.get("refund_account"))
+                  refund_account=f.get("refund_account"),
+                  phone_verified=True)
         u.set_password(f["password"])
         db.session.add(u)
         db.session.commit()
+        session.pop("verified_phone", None)
         login_user(u)
         flash("회원가입이 완료되었습니다.")
         return redirect(url_for("index"))
     return render_template("register.html")
+
+
+# ---------------------------------------------------------------------------
+# 전화번호 SMS 인증 (회원가입용)
+# ---------------------------------------------------------------------------
+
+def _generate_otp_code() -> str:
+    return f"{random.randint(0, 999999):06d}"
+
+
+@app.route("/api/phone/send-code", methods=["POST"])
+def api_phone_send_code():
+    phone = (request.json or {}).get("phone", "").strip()
+    if not phone or len(phone) < 10:
+        return jsonify({"error": "전화번호를 정확히 입력해주세요."}), 400
+    if User.query.filter_by(phone=phone).first():
+        return jsonify({"error": "이미 가입된 전화번호입니다."}), 400
+    # 최근 1분 이내에 발송한 코드가 있으면 도스 방지 위해 재발송 제한
+    recent = (PhoneVerification.query
+              .filter_by(phone=phone)
+              .order_by(PhoneVerification.created_at.desc()).first())
+    if recent and (datetime.utcnow() - recent.created_at) < timedelta(seconds=45):
+        return jsonify({"error": "잠시 후 다시 시도해주세요 (45초 이내 재발송 제한)."}), 429
+    code = _generate_otp_code()
+    pv = PhoneVerification(phone=phone, code=code,
+                            expires_at=datetime.utcnow() + timedelta(minutes=5))
+    db.session.add(pv)
+    db.session.commit()
+    msg = f"[위단테] 인증번호 {code} (5분 유효)"
+    r = send_sms(phone, msg)
+    return jsonify({"ok": True, "delivered": r["success"]})
+
+
+@app.route("/api/phone/verify", methods=["POST"])
+def api_phone_verify():
+    data = request.json or {}
+    phone = (data.get("phone") or "").strip()
+    code = (data.get("code") or "").strip()
+    if not phone or not code:
+        return jsonify({"error": "전화번호와 인증번호를 입력해주세요."}), 400
+    pv = (PhoneVerification.query
+          .filter_by(phone=phone)
+          .order_by(PhoneVerification.created_at.desc()).first())
+    if not pv:
+        return jsonify({"error": "인증번호를 먼저 요청해주세요."}), 400
+    if pv.expires_at < datetime.utcnow():
+        return jsonify({"error": "인증번호가 만료되었습니다. 다시 요청해주세요."}), 400
+    if pv.attempt_count >= 5:
+        return jsonify({"error": "인증 시도 횟수를 초과했습니다. 다시 요청해주세요."}), 400
+    if pv.code != code:
+        pv.attempt_count += 1
+        db.session.commit()
+        return jsonify({"error": "인증번호가 일치하지 않습니다."}), 400
+    pv.verified = True
+    db.session.commit()
+    session["verified_phone"] = phone
+    return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# 마이페이지 (회원 정보 + 참가 대회 이력)
+# ---------------------------------------------------------------------------
+
+@app.route("/profile")
+@login_required
+def profile():
+    # 참가한 대회들
+    my_parts = (TournamentParticipant.query
+                .filter_by(user_id=current_user.id)
+                .options(joinedload(TournamentParticipant.tournament))
+                .order_by(TournamentParticipant.applied_at.desc()).all())
+    # 최고 관리자면 권한 부여 가능한 회원 목록
+    granting_users = []
+    if current_user.is_superadmin:
+        granting_users = User.query.order_by(User.name).all()
+    return render_template("profile.html", my_parts=my_parts, granting_users=granting_users)
+
+
+@app.route("/profile", methods=["POST"])
+@login_required
+def profile_update():
+    f = request.form
+    current_user.name = f.get("name") or current_user.name
+    current_user.region = f.get("region") or current_user.region
+    current_user.club = f.get("club") or current_user.club
+    if f.get("refund_bank"):
+        current_user.refund_bank = f.get("refund_bank")
+    if f.get("refund_account"):
+        current_user.refund_account = f.get("refund_account")
+    if f.get("new_password"):
+        current_user.set_password(f["new_password"])
+    db.session.commit()
+    flash("회원정보가 저장되었습니다.")
+    return redirect(url_for("profile"))
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -235,8 +413,15 @@ def logout():
 @app.route("/tournament/<int:tid>")
 def tournament_page(tid):
     t = Tournament.query.get_or_404(tid)
-    prelim = Match.query.filter_by(tournament_id=tid, stage="prelim").order_by(Match.group_no).all()
-    main = Match.query.filter_by(tournament_id=tid, stage="main").all()
+    # N+1 방지: player1/player2 를 한 번에 로드
+    prelim = (Match.query
+              .filter_by(tournament_id=tid, stage="prelim")
+              .options(joinedload(Match.player1), joinedload(Match.player2))
+              .order_by(Match.group_no).all())
+    main = (Match.query
+            .filter_by(tournament_id=tid, stage="main")
+            .options(joinedload(Match.player1), joinedload(Match.player2))
+            .all())
     groups = {}
     for m in prelim:
         groups.setdefault(m.group_no, []).append(m)
@@ -245,9 +430,11 @@ def tournament_page(tid):
         my_participation = TournamentParticipant.query.filter_by(
             tournament_id=tid, user_id=current_user.id).first()
     participant_count = TournamentParticipant.query.filter_by(tournament_id=tid).count()
+    is_manager = current_user.is_authenticated and can_manage_tournament(current_user, t)
     return render_template("tournament.html", t=t, groups=groups, main=main,
                             call_types=CALL_TYPES, my_participation=my_participation,
-                            participant_count=participant_count)
+                            participant_count=participant_count,
+                            is_manager=is_manager)
 
 
 @app.route("/admin/banners")
@@ -450,7 +637,7 @@ def tournament_calendar():
 @login_required
 def api_update_status(tid):
     t = Tournament.query.get_or_404(tid)
-    if not current_user.is_admin:
+    if not can_manage_tournament(current_user, t):
         abort(403)
     status = request.json.get("status")
     if status not in ("접수중", "접수마감", "진행중", "종료"):
@@ -465,16 +652,26 @@ def api_update_status(tid):
 def admin_home():
     if not current_user.is_admin:
         abort(403)
-    tournaments = Tournament.query.filter_by(organizer_id=current_user.organizer_id).order_by(
-        Tournament.created_at.desc()).all()
-    organizers = Organizer.query.all()
+    # 최고 관리자는 전체 대회, 그 외 관리자는 자기가 만든 대회 + 소유자 없는 예전 대회(같은 organizer) 만
+    if current_user.is_superadmin:
+        tournaments = Tournament.query.order_by(Tournament.created_at.desc()).all()
+    else:
+        tournaments = (Tournament.query
+                       .filter(db.or_(
+                            Tournament.created_by_id == current_user.id,
+                            db.and_(Tournament.created_by_id.is_(None),
+                                    Tournament.organizer_id == current_user.organizer_id),
+                        ))
+                       .order_by(Tournament.created_at.desc()).all())
+    organizers = Organizer.query.all() if current_user.is_superadmin else []
     return render_template("admin_home.html", tournaments=tournaments, organizers=organizers)
 
 
 @app.route("/admin/tournaments/new", methods=["GET", "POST"])
 @login_required
 def new_tournament():
-    if not current_user.is_admin:
+    # 대회 생성 권한: 최고 관리자 또는 대회 생성 권한을 부여받은 사용자
+    if not (current_user.is_superadmin or current_user.can_create_tournament):
         abort(403)
     if request.method == "POST":
         f = request.form
@@ -488,7 +685,11 @@ def new_tournament():
             deposit_account=f.get("deposit_account") or None,
             deposit_holder=f.get("deposit_holder") or None,
             status="접수중",
+            created_by_id=current_user.id,
         )
+        # 대회를 만드는 사용자는 is_admin=True 로 승격(자기 대회 관리 위해)
+        if not current_user.is_admin:
+            current_user.is_admin = True
         db.session.add(t)
         db.session.commit()
         flash("대회가 생성되었습니다.")
@@ -533,28 +734,34 @@ def new_organizer():
 @login_required
 def admin_dashboard(tid):
     t = Tournament.query.get_or_404(tid)
-    if not current_user.is_admin:
+    if not can_manage_tournament(current_user, t):
         abort(403)
-    participants = TournamentParticipant.query.filter_by(tournament_id=tid).order_by(
-        TournamentParticipant.applied_at).all()
+    # 참가자와 user 관계를 한 번에 (N+1 방지)
+    participants = (TournamentParticipant.query
+                    .filter_by(tournament_id=tid)
+                    .options(joinedload(TournamentParticipant.user))
+                    .order_by(TournamentParticipant.applied_at).all())
     confirmed_ids = {p.user_id for p in participants if p.status == "확정"}
-    # 조 편성 대상: 주최자 소속 회원 + 이 대회에 실제로 신청한 회원(소속 무관, 공개가입자 포함)
-    org_players = User.query.filter_by(organizer_id=t.organizer_id).all()
     applicant_ids = {p.user_id for p in participants}
-    applicant_users = User.query.filter(User.id.in_(applicant_ids)).all() if applicant_ids else []
-    players_map = {u.id: u for u in org_players}
-    for u in applicant_users:
-        players_map[u.id] = u
-    players = sorted(players_map.values(), key=lambda u: u.name)
+    # 조 편성 대상: (1) 이 대회에 신청한 회원 우선, (2) 최고 관리자면 organizer 소속 회원까지 옵션 확대
+    #  * 예전 코드는 organizer 소속 회원 전체를 항상 로드해서 회원이 많으면 렉의 원인이 됨
+    if applicant_ids:
+        applicant_users = User.query.filter(User.id.in_(applicant_ids)).all()
+    else:
+        applicant_users = []
+    players = sorted(applicant_users, key=lambda u: u.name)
     refund_requests = RefundRequest.query.filter_by(tournament_id=tid).order_by(
         RefundRequest.created_at.desc()).all()
-    calls = CallLog.query.filter_by(tournament_id=tid).order_by(CallLog.created_at.desc()).all()
+    calls = (CallLog.query.filter_by(tournament_id=tid)
+             .options(joinedload(CallLog.user))
+             .order_by(CallLog.created_at.desc()).limit(50).all())
     prelim = Match.query.filter_by(tournament_id=tid, stage="prelim").all()
     groups = sorted(set(m.group_no for m in prelim)) if prelim else []
     return render_template("admin_dashboard.html", t=t, players=players, calls=calls,
                             groups=groups, call_types=CALL_TYPES,
                             participants=participants, confirmed_ids=confirmed_ids,
-                            refund_requests=refund_requests)
+                            refund_requests=refund_requests,
+                            can_delete=can_delete_tournament(current_user, t))
 
 
 # ---------------------------------------------------------------------------
@@ -565,13 +772,17 @@ def admin_dashboard(tid):
 @login_required
 def api_generate_draw(tid):
     t = Tournament.query.get_or_404(tid)
-    if not current_user.is_admin:
+    if not can_manage_tournament(current_user, t):
         abort(403)
-    player_ids = request.json.get("player_ids", [])
+    data = request.json or {}
+    player_ids = data.get("player_ids", [])
     # 중복 제거 (같은 선수를 두 번 체크하는 실수 방지)
     player_ids = list(dict.fromkeys(int(pid) for pid in player_ids))
     if len(player_ids) < 2:
         return jsonify({"error": "참가자가 2명 이상 필요합니다"}), 400
+    # 수동 조 배정 데이터가 있으면 사용, 없으면 랜덤
+    #   manual_groups: [[id, id, id], [id, id, id], ...]  각 조의 선수 id 배열
+    manual_groups = data.get("manual_groups")
     try:
         # 재생성 시 이전 매치를 완전 삭제 (조 우승자 반영 상태 등 초기화)
         old_match_ids = [row[0] for row in db.session.query(Match.id).filter_by(tournament_id=t.id).all()]
@@ -581,7 +792,18 @@ def api_generate_draw(tid):
                 {"match_id": None}, synchronize_session=False)
             Match.query.filter_by(tournament_id=t.id).delete(synchronize_session=False)
             db.session.commit()
-        generate_prelim_groups(t, player_ids)
+        if manual_groups:
+            # 각 조를 관리자가 직접 지정
+            cleaned = []
+            for g in manual_groups:
+                ids = list(dict.fromkeys(int(x) for x in g if x))
+                if ids:
+                    cleaned.append(ids)
+            if not cleaned:
+                return jsonify({"error": "수동 조 편성에 유효한 선수가 없습니다"}), 400
+            generate_manual_groups(t, cleaned)
+        else:
+            generate_prelim_groups(t, player_ids)
     except Exception as e:
         db.session.rollback()
         app.logger.exception("draw generation failed")
@@ -594,7 +816,7 @@ def api_generate_draw(tid):
 @login_required
 def api_submit_score(mid):
     m = Match.query.get_or_404(mid)
-    if not current_user.is_admin:
+    if not can_manage_tournament(current_user, m.tournament):
         abort(403)
     data = request.json
     m.score = data.get("score")
@@ -614,7 +836,7 @@ def api_submit_score(mid):
 @login_required
 def api_group_winner(tid, gno):
     t = Tournament.query.get_or_404(tid)
-    if not current_user.is_admin:
+    if not can_manage_tournament(current_user, t):
         abort(403)
     winner_id = request.json.get("winner_id")
     record_group_winner(t, gno, winner_id)
@@ -623,8 +845,15 @@ def api_group_winner(tid, gno):
 
 @app.route("/api/tournaments/<int:tid>/draw")
 def api_get_draw(tid):
-    prelim = Match.query.filter_by(tournament_id=tid, stage="prelim").all()
-    main = Match.query.filter_by(tournament_id=tid, stage="main").all()
+    # N+1 방지: player1/player2 관계를 joinedload 로 한 번에 로드
+    prelim = (Match.query
+              .filter_by(tournament_id=tid, stage="prelim")
+              .options(joinedload(Match.player1), joinedload(Match.player2))
+              .all())
+    main = (Match.query
+            .filter_by(tournament_id=tid, stage="main")
+            .options(joinedload(Match.player1), joinedload(Match.player2))
+            .all())
 
     def m2d(m):
         return {
@@ -646,7 +875,7 @@ def api_get_draw(tid):
 def api_schedule_match(mid):
     """관리자가 경기에 코트 번호와 시간을 배정 (본선 코트진행 기능)"""
     m = Match.query.get_or_404(mid)
-    if not current_user.is_admin:
+    if not can_manage_tournament(current_user, m.tournament):
         abort(403)
     data = request.json
     m.court = data.get("court") or None
@@ -722,7 +951,7 @@ def api_mark_paid(pid):
 def api_confirm_participant(pid):
     """관리자가 입금 확인 후 참가를 확정 처리"""
     p = TournamentParticipant.query.get_or_404(pid)
-    if not current_user.is_admin:
+    if not can_manage_tournament(current_user, p.tournament):
         abort(403)
     p.status = "확정"
     p.confirmed_at = datetime.utcnow()
@@ -735,7 +964,7 @@ def api_confirm_participant(pid):
 def api_cancel_participant(pid):
     """본인 신청 취소 또는 관리자의 강제 취소"""
     p = TournamentParticipant.query.get_or_404(pid)
-    if p.user_id != current_user.id and not current_user.is_admin:
+    if p.user_id != current_user.id and not can_manage_tournament(current_user, p.tournament):
         abort(403)
     db.session.delete(p)
     db.session.commit()
@@ -837,9 +1066,15 @@ def api_end_refund(rid):
 def admin_refunds():
     if not current_user.is_admin:
         abort(403)
-    requests = (RefundRequest.query.join(Tournament)
-                .filter(Tournament.organizer_id == current_user.organizer_id)
-                .order_by(RefundRequest.created_at.desc()).all())
+    # 최고 관리자는 전체 환불 요청, 아니면 자기가 관리 가능한 대회만
+    q = RefundRequest.query.join(Tournament)
+    if not current_user.is_superadmin:
+        q = q.filter(db.or_(
+            Tournament.created_by_id == current_user.id,
+            db.and_(Tournament.created_by_id.is_(None),
+                    Tournament.organizer_id == current_user.organizer_id),
+        ))
+    requests = q.order_by(RefundRequest.created_at.desc()).all()
     return render_template("admin_refunds.html", requests=requests)
 
 
@@ -850,18 +1085,26 @@ def admin_refunds():
 @app.route("/api/tournaments/<int:tid>/call", methods=["POST"])
 @login_required
 def api_call(tid):
-    data = request.json
+    t = Tournament.query.get_or_404(tid)
+    data = request.json or {}
     call = CallLog(tournament_id=tid, match_id=data.get("match_id"),
                     user_id=current_user.id, call_type=data.get("call_type", "etc"),
                     court=data.get("court"))
     db.session.add(call)
     db.session.commit()
 
-    socketio.emit("new_call", {
+    payload = {
         "id": call.id, "player": current_user.name, "court": call.court,
         "type": CALL_TYPES.get(call.call_type, call.call_type),
+        "tournament_id": tid,
+        "tournament_title": t.title,
         "created_at": call.created_at.strftime("%H:%M:%S"),
-    }, room=f"tournament_{tid}_admin")
+    }
+    # 이 대회의 관리자 room 과 알림 전용 room 양쪽으로 emit
+    #  - tournament_{tid}_admin: 관리 대시보드 열어둔 사람
+    #  - tournament_{tid}_alerts: 대회 페이지에서 관리자 뱃지 뜬 사람
+    socketio.emit("new_call", payload, room=f"tournament_{tid}_admin")
+    socketio.emit("call_alert", payload, room=f"tournament_{tid}_alerts")
     return jsonify({"ok": True})
 
 
@@ -869,7 +1112,8 @@ def api_call(tid):
 @login_required
 def api_resolve_call(cid):
     call = CallLog.query.get_or_404(cid)
-    if not current_user.is_admin:
+    t = Tournament.query.get(call.tournament_id)
+    if not (t and can_manage_tournament(current_user, t)):
         abort(403)
     call.status = request.json.get("status", "처리완료")
     db.session.commit()
@@ -884,7 +1128,7 @@ def api_resolve_call(cid):
 @login_required
 def api_notify(tid):
     t = Tournament.query.get_or_404(tid)
-    if not current_user.is_admin:
+    if not can_manage_tournament(current_user, t):
         abort(403)
     message = request.json.get("message") or (
         f"[위단테] {t.title} 예선 안내: {t.event_date} {t.location}. "
@@ -903,13 +1147,61 @@ def api_notify(tid):
 
 
 # ---------------------------------------------------------------------------
+# API - 대회 삭제 (최고 관리자 전용)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/tournaments/<int:tid>", methods=["DELETE"])
+@login_required
+def api_delete_tournament(tid):
+    t = Tournament.query.get_or_404(tid)
+    if not can_delete_tournament(current_user, t):
+        abort(403)
+    # 관련 리소스 명시적 삭제 (FK 순서: 자식부터)
+    try:
+        # 환불 채팅 메시지 → 요청 → 참가자 → 콜/문자 로그 → 매치는 cascade
+        rr_ids = [r.id for r in RefundRequest.query.filter_by(tournament_id=tid).all()]
+        if rr_ids:
+            RefundMessage.query.filter(RefundMessage.refund_request_id.in_(rr_ids)).delete(synchronize_session=False)
+            RefundRequest.query.filter_by(tournament_id=tid).delete(synchronize_session=False)
+        TournamentParticipant.query.filter_by(tournament_id=tid).delete(synchronize_session=False)
+        CallLog.query.filter_by(tournament_id=tid).delete(synchronize_session=False)
+        SmsLog.query.filter_by(tournament_id=tid).delete(synchronize_session=False)
+        # Match 는 Tournament 의 cascade="all, delete-orphan" 로 함께 삭제됨
+        db.session.delete(t)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("tournament delete failed")
+        return jsonify({"error": "대회 삭제 중 오류가 발생했습니다"}), 500
+    return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# API - 대회 생성 권한 부여 (최고 관리자만)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/users/<int:uid>/tournament-permission", methods=["POST"])
+@login_required
+def api_grant_tournament_permission(uid):
+    if not current_user.is_superadmin:
+        abort(403)
+    u = User.query.get_or_404(uid)
+    grant = bool(request.json.get("can_create_tournament"))
+    u.can_create_tournament = grant
+    if grant:
+        u.is_admin = True   # 대회 생성 = 관리자 승격
+    db.session.commit()
+    return jsonify({"ok": True, "can_create_tournament": u.can_create_tournament})
+
+
+# ---------------------------------------------------------------------------
 # API - 멀티테넌트 (타 주최자 카테고리 생성)
 # ---------------------------------------------------------------------------
 
 @app.route("/api/organizers", methods=["POST"])
 @login_required
 def api_create_organizer():
-    if not current_user.is_admin:
+    if not current_user.is_superadmin:
         abort(403)
     data = request.json
     org = Organizer(name=data["name"], slug=data["slug"], contact_phone=data.get("contact_phone"))
@@ -925,9 +1217,17 @@ def api_create_organizer():
 @socketio.on("join_tournament")
 def on_join(data):
     tid = data.get("tournament_id")
+    if not tid:
+        return
     join_room(f"tournament_{tid}")
+    # 관리 대시보드에서 명시적으로 as_admin=True 로 붙는 케이스
     if data.get("as_admin"):
         join_room(f"tournament_{tid}_admin")
+    # 대회 공개 페이지라도 현재 사용자가 이 대회의 관리자면 알림 room에 참여
+    if current_user.is_authenticated:
+        t = Tournament.query.get(tid)
+        if t and can_manage_tournament(current_user, t):
+            join_room(f"tournament_{tid}_alerts")
 
 
 @socketio.on("join_refund")
@@ -941,19 +1241,29 @@ def on_join_refund(data):
 def init_db():
     """flask --app app init-db  로 실행: 테이블 생성 + 샘플 관리자 계정 생성"""
     db.create_all()
+    _apply_lightweight_migrations()
     if not Organizer.query.filter_by(slug="wedante").first():
         org = Organizer(name="위단테", slug="wedante", contact_phone="010-6890-9123")
         db.session.add(org)
         db.session.commit()
-        admin = User(name="관리자", phone="01000000000", organizer_id=org.id, is_admin=True)
+        admin = User(name="관리자", phone="01000000000", organizer_id=org.id,
+                     is_admin=True, is_superadmin=True, can_create_tournament=True,
+                     phone_verified=True)
         admin.set_password("admin1234")
         db.session.add(admin)
         db.session.commit()
         print("DB 초기화 완료. 관리자 로그인: 01000000000 / admin1234")
 
 
-if __name__ == "__main__":
-    with app.app_context():
+# gunicorn 부트 시(WSGI 임포트만으로 앱 시작) 스키마를 최신화한다
+with app.app_context():
+    try:
         db.create_all()
+        _apply_lightweight_migrations()
+    except Exception:
+        app.logger.exception("boot-time schema sync failed")
+
+
+if __name__ == "__main__":
     debug_mode = os.environ.get("FLASK_DEBUG", "0") == "1"
     socketio.run(app, debug=debug_mode, host="0.0.0.0", port=5000)

@@ -31,15 +31,30 @@
   <nav>
     <a href="{{ url_for('tournament_calendar') }}">대회 캘린더</a>
     {% if current_user.is_authenticated %}
-      <span class="nav-user-chip">{{ current_user.name[0] }}</span>
-      <span class="nav-user">{{ current_user.name }}님</span>
-      {% if current_user.is_admin %}
-      <a href="{{ url_for('admin_home') }}">주최자 메뉴</a>
-      <a href="{{ url_for('admin_refunds') }}">환불 관리</a>
-      {% endif %}
-      {% if current_user.is_superadmin %}
-      <a href="{{ url_for('admin_banners') }}">배너 관리</a>
-      <a href="{{ url_for('admin_icons') }}">아이콘 관리</a>
+      <a class="nav-me" href="{{ url_for('profile') }}" title="내 정보">
+        <span class="nav-user-chip">{{ current_user.name[0] }}</span>
+        <span class="nav-user">{{ current_user.name }}님</span>
+      </a>
+      {% if current_user.is_admin or current_user.is_superadmin %}
+      <div class="nav-menu">
+        <button class="nav-menu-btn" type="button" aria-haspopup="true">관리 메뉴 ▾</button>
+        <div class="nav-menu-panel">
+          <a href="{{ url_for('admin_home') }}">🏆 내 대회</a>
+          {% if current_user.is_superadmin or current_user.can_create_tournament %}
+          <a href="{{ url_for('new_tournament') }}">➕ 새 대회 만들기</a>
+          {% endif %}
+          {% if current_user.is_admin %}
+          <a href="{{ url_for('admin_refunds') }}">💬 환불 관리</a>
+          {% endif %}
+          {% if current_user.is_superadmin %}
+          <div class="nav-menu-divider"></div>
+          <a href="{{ url_for('admin_banners') }}">🖼️ 배너 관리</a>
+          <a href="{{ url_for('admin_icons') }}">🔗 아이콘 관리</a>
+          <a href="{{ url_for('new_organizer') }}">🏢 주최자 카테고리 만들기</a>
+          <a href="{{ url_for('profile') }}#permissions">🔑 대회 생성 권한 부여</a>
+          {% endif %}
+        </div>
+      </div>
       {% endif %}
       <a href="{{ url_for('logout') }}">로그아웃</a>
     {% else %}

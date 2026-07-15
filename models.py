@@ -52,6 +52,8 @@ class User(db.Model, UserMixin):
     password_hash = db.Column(db.String(255), nullable=False)
     is_admin = db.Column(db.Boolean, default=False)            # 주최측 관리자 여부
     is_superadmin = db.Column(db.Boolean, default=False)       # 위단테 최상위 관리자(배너 등 전역설정)
+    can_create_tournament = db.Column(db.Boolean, default=False)  # 최고 관리자가 부여하는 대회 생성 권한
+    phone_verified = db.Column(db.Boolean, default=False)      # 전화번호 SMS 인증 여부
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def set_password(self, raw):
@@ -92,10 +94,12 @@ class Tournament(db.Model):
     deposit_bank = db.Column(db.String(40))          # 참가비 입금계좌 은행
     deposit_account = db.Column(db.String(40))       # 참가비 입금계좌 번호
     deposit_holder = db.Column(db.String(40))        # 예금주
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)  # 이 대회를 만든 관리자
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     matches = db.relationship("Match", backref="tournament", lazy=True,
                                cascade="all, delete-orphan")
+    creator = db.relationship("User", foreign_keys=[created_by_id])
 
 
 class TournamentParticipant(db.Model):
@@ -201,6 +205,18 @@ class SmsLog(db.Model):
     sent_at = db.Column(db.DateTime, default=datetime.utcnow)
     success = db.Column(db.Boolean, default=False)
     provider_response = db.Column(db.Text)
+
+
+class PhoneVerification(db.Model):
+    """회원가입 시 전화번호 SMS 인증용 임시 코드 저장."""
+    __tablename__ = "phone_verifications"
+    id = db.Column(db.Integer, primary_key=True)
+    phone = db.Column(db.String(20), nullable=False, index=True)
+    code = db.Column(db.String(10), nullable=False)                # 6자리 숫자
+    expires_at = db.Column(db.DateTime, nullable=False)            # 5분 유효
+    verified = db.Column(db.Boolean, default=False)                # 성공적으로 검증됐는지
+    attempt_count = db.Column(db.Integer, default=0)               # 오입력 5회 초과 시 무효
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
 class Banner(db.Model):
