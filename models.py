@@ -30,6 +30,8 @@ class Organizer(db.Model):
     name = db.Column(db.String(120), nullable=False)          # 예: "위단테", "OO테니스아카데미"
     slug = db.Column(db.String(80), unique=True, nullable=False)  # URL 경로 /org/<slug>
     contact_phone = db.Column(db.String(20))
+    band_url = db.Column(db.String(300))       # 위단테 밴드 등 커뮤니티 링크
+    youtube_url = db.Column(db.String(300))    # 유튜브 채널 링크
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     tournaments = db.relationship("Tournament", backref="organizer", lazy=True)
@@ -86,6 +88,7 @@ class Tournament(db.Model):
     entry_fee = db.Column(db.Integer, default=0)
     status = db.Column(db.String(20), default="접수중")  # 접수중 / 접수마감 / 진행중 / 종료
     group_size = db.Column(db.Integer, default=3)    # 예선 조 인원
+    parking_url = db.Column(db.String(400))          # 주차등록 링크 (외부)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     matches = db.relationship("Match", backref="tournament", lazy=True,

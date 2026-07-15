@@ -304,6 +304,7 @@ def new_tournament():
             title=f["title"], location=f.get("location"), event_date=f.get("event_date"),
             entry_fee=int(f.get("entry_fee") or 0),
             group_size=int(f.get("group_size") or 3),
+            parking_url=f.get("parking_url") or None,
             status="접수중",
         )
         db.session.add(t)
@@ -329,7 +330,8 @@ def new_organizer():
             flash("이미 가입된 전화번호입니다.")
             return redirect(url_for("new_organizer"))
 
-        org = Organizer(name=f["name"], slug=f["slug"], contact_phone=f.get("contact_phone"))
+        org = Organizer(name=f["name"], slug=f["slug"], contact_phone=f.get("contact_phone"),
+                       band_url=f.get("band_url") or None, youtube_url=f.get("youtube_url") or None)
         db.session.add(org)
         db.session.commit()
 
@@ -423,8 +425,54 @@ def api_get_draw(tid):
             "player2_id": m.player2_id,
             "score": m.score, "status": m.status,
             "winner_id": m.winner_id,
+            "court": m.court, "scheduled_time": m.scheduled_time,
         }
     return jsonify({"prelim": [m2d(m) for m in prelim], "main": [m2d(m) for m in main]})
+
+
+@app.route("/api/matches/<int:mid>/schedule", methods=["POST"])
+@login_required
+def api_schedule_match(mid):
+    """관리자가 경기에 코트 번호와 시간을 배정 (본선 코트진행 기능)"""
+    m = Match.query.get_or_404(mid)
+    if not current_user.is_admin:
+        abort(403)
+    data = request.json
+    m.court = data.get("court") or None
+    m.scheduled_time = data.get("scheduled_time") or None
+    if data.get("status"):
+        m.status = data["status"]
+    db.session.commit()
+    socketio.emit("bracket_update", {"tournament_id": m.tournament_id},
+                   room=f"tournament_{m.tournament_id}")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/tournaments/<int:tid>/search")
+def api_search_players(tid):
+    """선수이름 검색 → 코트/시간/상대 확인 (원본 사이트의 '선수 검색' 기능)"""
+    name = (request.args.get("name") or "").strip()
+    if not name:
+        return jsonify({"results": []})
+    matches = Match.query.filter(Match.tournament_id == tid).join(
+        User, db.or_(Match.player1_id == User.id, Match.player2_id == User.id)
+    ).filter(User.name.ilike(f"%{name}%")).all()
+
+    results = []
+    seen = set()
+    for m in matches:
+        if m.id in seen:
+            continue
+        seen.add(m.id)
+        results.append({
+            "stage": "예선" if m.stage == "prelim" else (m.round_name or "본선"),
+            "group_no": m.group_no,
+            "player1": m.player1.name if m.player1 else None,
+            "player2": m.player2.name if m.player2 else None,
+            "court": m.court, "scheduled_time": m.scheduled_time,
+            "status": m.status, "score": m.score,
+        })
+    return jsonify({"results": results})
 
 
 # ---------------------------------------------------------------------------

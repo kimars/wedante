@@ -144,17 +144,30 @@ function renderPrelimAdmin(matches) {
   const el = document.getElementById("prelim-admin-list");
   el.innerHTML = Object.entries(groups).map(([gno, ms]) => `
     <div style="margin-bottom:14px;">
-      <strong style="font-family:var(--font-mono);color:var(--clay);">${gno}조</strong>
+      <strong style="font-family:var(--font-mono);color:var(--primary);">${gno}조</strong>
       ${ms.map(m => `
-        <div class="card-row" style="border-bottom:1px solid var(--line);padding:6px 0;">
+        <div class="card-row" style="border-bottom:1px solid var(--border);padding:8px 0;flex-wrap:wrap;">
           <span>${m.player1} vs ${m.player2}</span>
-          <span>
-            <input placeholder="6-3,6-4" id="pscore-${m.id}" style="width:90px;padding:5px;border:1px solid var(--line);border-radius:4px;" value="${m.score || ''}">
+          <span style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+            <input placeholder="코트" id="pcourt-${m.id}" style="width:56px;padding:6px;border:1px solid var(--border-strong);border-radius:8px;" value="${m.court || ''}">
+            <input placeholder="시간 09:00" id="ptime-${m.id}" style="width:78px;padding:6px;border:1px solid var(--border-strong);border-radius:8px;" value="${m.scheduled_time || ''}">
+            <button class="secondary" style="padding:7px 10px;font-size:12px;" onclick="submitSchedule(${m.id}, 'p')">배정</button>
+            <input placeholder="6-3,6-4" id="pscore-${m.id}" style="width:90px;padding:6px;border:1px solid var(--border-strong);border-radius:8px;" value="${m.score || ''}">
             <button class="secondary" onclick="submitPrelimScore(${m.id}, ${m.player1_id})">${m.player1} 승</button>
             <button class="secondary" onclick="submitPrelimScore(${m.id}, ${m.player2_id})">${m.player2} 승</button>
           </span>
         </div>`).join("")}
     </div>`).join("") || "<p>예선 대진표가 아직 생성되지 않았습니다.</p>";
+}
+
+function submitSchedule(mid, prefix) {
+  const court = document.getElementById(`${prefix}court-${mid}`).value;
+  const time = document.getElementById(`${prefix}time-${mid}`).value;
+  fetch(`/api/matches/${mid}/schedule`, {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({court, scheduled_time: time})
+  }).then(r => r.json()).then(() => { toast("코트/시간이 배정되었습니다.", "success"); loadDraw(); })
+    .catch(() => toast("배정에 실패했습니다.", "error"));
 }
 
 function submitPrelimScore(mid, winnerId) {
@@ -180,10 +193,13 @@ function fillGroupSelect(gno, matches) {
 function renderMainAdmin(matches) {
   const el = document.getElementById("main-admin-list");
   el.innerHTML = matches.filter(m => m.player1_id && m.player2_id).map(m => `
-    <div class="card-row" style="border-bottom:1px solid var(--line);padding:8px 0;">
+    <div class="card-row" style="border-bottom:1px solid var(--border);padding:8px 0;flex-wrap:wrap;">
       <span>${m.round_name} · ${m.player1} vs ${m.player2}</span>
-      <span>
-        <input placeholder="6-3,6-4" id="score-${m.id}" style="width:100px;padding:6px;border:1px solid var(--line);border-radius:4px;" value="${m.score || ''}">
+      <span style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+        <input placeholder="코트" id="mcourt-${m.id}" style="width:56px;padding:6px;border:1px solid var(--border-strong);border-radius:8px;" value="${m.court || ''}">
+        <input placeholder="시간 09:00" id="mtime-${m.id}" style="width:78px;padding:6px;border:1px solid var(--border-strong);border-radius:8px;" value="${m.scheduled_time || ''}">
+        <button class="secondary" style="padding:7px 10px;font-size:12px;" onclick="submitSchedule(${m.id}, 'm')">배정</button>
+        <input placeholder="6-3,6-4" id="score-${m.id}" style="width:100px;padding:6px;border:1px solid var(--border-strong);border-radius:8px;" value="${m.score || ''}">
         <button class="secondary" onclick="submitScore(${m.id}, ${m.player1_id})">${m.player1} 승</button>
         <button class="secondary" onclick="submitScore(${m.id}, ${m.player2_id})">${m.player2} 승</button>
       </span>
