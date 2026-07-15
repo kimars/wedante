@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<span class="eyebrow">Calendar</span>
+<h1>대회 캘린더</h1>
+
+<div class="card" style="margin-bottom:24px;">
+  <div class="card-row">
+    <a class="btn secondary" href="{{ url_for('tournament_calendar', year=prev_year, month=prev_month) }}">‹ 이전 달</a>
+    <strong style="font-size:19px;">{{ year }}년 {{ month }}월</strong>
+    <a class="btn secondary" href="{{ url_for('tournament_calendar', year=next_year, month=next_month) }}">다음 달 ›</a>
+  </div>
+</div>
+
+<div class="calendar-grid">
+  {% for wd in ['일','월','화','수','목','금','토'] %}
+  <div class="calendar-weekday">{{ wd }}</div>
+  {% endfor %}
+
+  {% for week in weeks %}
+    {% for d in week %}
+    <div class="calendar-cell {% if d.month != month %}other-month{% endif %} {% if d == today %}today{% endif %}">
+      <div class="calendar-date-row">
+        <span class="calendar-date">{{ d.day }}</span>
+        {% if current_user.is_authenticated and current_user.is_admin and d.month == month %}
+        <a class="calendar-add" href="{{ url_for('new_tournament', date=d.isoformat()) }}" title="이 날짜로 대회 만들기">+</a>
+        {% endif %}
+      </div>
+      {% for t in by_date.get(d.isoformat(), []) %}
+      <a class="calendar-chip status-{{ t.status }}" href="{{ url_for('tournament_page', tid=t.id) }}">{{ t.title }}</a>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  {% endfor %}
+</div>
+
+<div class="card-row" style="margin-top:20px;gap:16px;flex-wrap:wrap;">
+  <span class="legend-item"><span class="legend-dot status-접수중"></span>접수중</span>
+  <span class="legend-item"><span class="legend-dot status-접수마감"></span>접수마감</span>
+  <span class="legend-item"><span class="legend-dot status-진행중"></span>진행중</span>
+  <span class="legend-item"><span class="legend-dot status-종료"></span>종료</span>
+</div>
+{% endblock %}

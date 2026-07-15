@@ -8,7 +8,15 @@
 <form class="panel" method="post" action="{{ url_for('edit_banner', bid=edit_banner.id) if edit_banner else url_for('new_banner') }}" style="max-width:520px;">
   <div class="field"><label>제목</label><input name="title" value="{{ edit_banner.title if edit_banner else '' }}" required></div>
   <div class="field"><label>부제 / 설명</label><input name="subtitle" value="{{ edit_banner.subtitle if edit_banner else '' }}"></div>
-  <div class="field"><label>이미지 URL (비워두면 그라디언트 배경)</label><input name="image_url" value="{{ edit_banner.image_url if edit_banner else '' }}" placeholder="https://..."></div>
+  <div class="field">
+    <label>배너 이미지</label>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <img id="banner-preview" src="{{ edit_banner.image_url if edit_banner and edit_banner.image_url else '' }}"
+           style="width:72px;height:44px;border-radius:8px;object-fit:cover;background:var(--surface-2);{% if not edit_banner or not edit_banner.image_url %}display:none;{% endif %}">
+      <input type="file" id="banner-file" accept="image/*">
+    </div>
+    <input name="image_url" id="image_url" value="{{ edit_banner.image_url if edit_banner else '' }}" placeholder="또는 이미지 URL 직접 입력 (비워두면 그라디언트 배경)" style="margin-top:8px;">
+  </div>
   <div class="field"><label>클릭 시 이동할 링크</label><input name="link_url" value="{{ edit_banner.link_url if edit_banner else '' }}" placeholder="/tournament/1"></div>
   <div class="field"><label>버튼 문구</label><input name="button_text" value="{{ edit_banner.button_text if edit_banner else '자세히 보기' }}"></div>
   <div class="card-row">
@@ -49,6 +57,8 @@
 
 {% block scripts %}
 <script>
+wireUploader("banner-file", "image_url", "banner-preview");
+
 function toggleBanner(id) {
   fetch(`/admin/banners/${id}/toggle`, {method: "POST"})
     .then(r => r.json()).then(() => { toast("배너 상태가 바뀌었습니다.", "success"); setTimeout(() => location.reload(), 500); });

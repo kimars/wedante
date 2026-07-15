@@ -186,6 +186,74 @@ h2::before { content: ""; width: 7px; height: 20px; border-radius: 4px; backgrou
 }
 .quick-link:hover { transform: translateY(-2px); box-shadow: var(--shadow-sm); border-color: var(--primary); color: var(--primary); }
 
+.icon-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 6px;
+  margin: 8px 0 40px; padding: 20px 12px; background: var(--surface); border-radius: var(--radius-sm);
+  border: 1px solid var(--border); box-shadow: var(--shadow-xs);
+}
+.icon-tile {
+  display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 4px;
+  border-radius: var(--radius-xs); color: var(--ink-soft);
+  animation: card-in .4s var(--ease) backwards;
+  transition: transform .28s var(--ease-spring), background .28s var(--ease);
+}
+.icon-tile:hover { transform: translateY(-4px); background: var(--surface-2); }
+.icon-tile-img {
+  width: 52px; height: 52px; border-radius: 16px; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--grad); box-shadow: var(--shadow-sm);
+  transition: transform .3s var(--ease-spring), box-shadow .3s var(--ease);
+}
+.icon-tile:hover .icon-tile-img { transform: scale(1.08) rotate(-4deg); box-shadow: var(--shadow-md); }
+.icon-tile-img img { width: 100%; height: 100%; object-fit: cover; }
+.icon-tile-fallback { color: #fff; font-weight: 800; font-size: 20px; }
+.icon-tile-label { font-size: 12px; font-weight: 700; text-align: center; }
+
+/* ---------- Calendar ---------- */
+.calendar-grid {
+  display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px;
+  background: var(--border); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  overflow: hidden; box-shadow: var(--shadow-xs);
+}
+.calendar-weekday {
+  background: var(--surface-2); text-align: center; padding: 10px 0; font-size: 12px;
+  font-weight: 800; color: var(--ink-faint);
+}
+.calendar-cell {
+  background: var(--surface); min-height: 96px; padding: 8px; display: flex; flex-direction: column; gap: 4px;
+  transition: background .25s var(--ease);
+}
+.calendar-cell:hover { background: var(--surface-2); }
+.calendar-cell.other-month { background: var(--bg); }
+.calendar-cell.other-month .calendar-date { color: var(--ink-faint); }
+.calendar-cell.today { background: var(--primary-wash); }
+.calendar-date-row { display: flex; justify-content: space-between; align-items: center; }
+.calendar-date { font-size: 13px; font-weight: 700; color: var(--ink-soft); }
+.calendar-cell.today .calendar-date { color: var(--primary); }
+.calendar-add {
+  width: 18px; height: 18px; border-radius: 50%; background: var(--surface-2); color: var(--ink-soft);
+  display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 800;
+  transition: background .25s var(--ease), color .25s var(--ease), transform .25s var(--ease-spring);
+}
+.calendar-add:hover { background: var(--grad); color: #fff; transform: scale(1.15); }
+.calendar-chip {
+  display: block; font-size: 11px; font-weight: 700; padding: 4px 7px; border-radius: 6px;
+  background: var(--primary-wash); color: var(--primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: transform .2s var(--ease-spring), filter .2s var(--ease);
+}
+.calendar-chip:hover { transform: translateX(2px); filter: brightness(.95); }
+.calendar-chip.status-접수마감, .calendar-chip.status-종료 { background: var(--surface-2); color: var(--ink-faint); }
+.calendar-chip.status-진행중 { background: var(--coral-wash); color: var(--coral); }
+.legend-item { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-soft); font-weight: 600; }
+.legend-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: var(--primary-wash); border: 2px solid var(--primary); }
+.legend-dot.status-접수마감, .legend-dot.status-종료 { border-color: var(--ink-faint); background: var(--surface-2); }
+.legend-dot.status-진행중 { border-color: var(--coral); background: var(--coral-wash); }
+
+@media (max-width: 640px) {
+  .calendar-cell { min-height: 64px; padding: 5px; }
+  .calendar-chip { font-size: 9.5px; padding: 3px 5px; }
+}
+
 .card {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
   padding: 24px; margin-bottom: 14px;
@@ -218,6 +286,7 @@ h2::before { content: ""; width: 7px; height: 20px; border-radius: 4px; backgrou
   white-space: nowrap;
 }
 .badge.closed { background: var(--surface-2); color: var(--ink-faint); }
+.badge.live { background: var(--coral-wash); color: var(--coral); }
 
 /* ---------- Forms ---------- */
 form.panel {

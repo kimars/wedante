@@ -29,11 +29,15 @@
     <span class="brand-word">위단테</span>
   </a>
   <nav>
+    <a href="{{ url_for('tournament_calendar') }}">대회 캘린더</a>
     {% if current_user.is_authenticated %}
       <span class="nav-user-chip">{{ current_user.name[0] }}</span>
       <span class="nav-user">{{ current_user.name }}님</span>
       {% if current_user.is_admin %}<a href="{{ url_for('admin_home') }}">주최자 메뉴</a>{% endif %}
-      {% if current_user.is_superadmin %}<a href="{{ url_for('admin_banners') }}">배너 관리</a>{% endif %}
+      {% if current_user.is_superadmin %}
+      <a href="{{ url_for('admin_banners') }}">배너 관리</a>
+      <a href="{{ url_for('admin_icons') }}">아이콘 관리</a>
+      {% endif %}
       <a href="{{ url_for('logout') }}">로그아웃</a>
     {% else %}
       <a href="{{ url_for('login') }}">로그인</a>
@@ -60,6 +64,7 @@
 
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script src="{{ url_for('static', filename='js/toast.js') }}"></script>
+<script src="{{ url_for('static', filename='js/upload.js') }}"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

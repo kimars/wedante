@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block content %}
+<span class="eyebrow">Superadmin</span>
+<h1>바로가기 아이콘 관리</h1>
+<p style="color:var(--ink-soft);max-width:520px;">홈 화면 배너 아래에 뜨는 9개의 바로가기 아이콘입니다. "대회" 타입으로 만들면 클릭 시 대회 캘린더로 이동합니다. 이 메뉴는 최상위 관리자만 접근할 수 있습니다.</p>
+
+<h2>{{ '아이콘 수정' if edit_icon else '새 아이콘 만들기' }}</h2>
+<form class="panel" method="post" action="{{ url_for('edit_icon', iid=edit_icon.id) if edit_icon else url_for('new_icon') }}" style="max-width:520px;">
+  <div class="field"><label>이름 (아이콘 아래 표시될 글자)</label><input name="label" value="{{ edit_icon.label if edit_icon else '' }}" required maxlength="10" placeholder="예: 대회, 코트예약, 공지"></div>
+
+  <div class="field">
+    <label>아이콘 이미지</label>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <img id="icon-preview" src="{{ edit_icon.icon_url if edit_icon and edit_icon.icon_url else '' }}"
+           style="width:52px;height:52px;border-radius:16px;object-fit:cover;background:var(--surface-2);{% if not edit_icon or not edit_icon.icon_url %}display:none;{% endif %}">
+      <input type="file" id="icon-file" accept="image/*">
+    </div>
+    <input name="icon_url" id="icon_url" value="{{ edit_icon.icon_url if edit_icon else '' }}" placeholder="또는 이미지 URL 직접 입력" style="margin-top:8px;">
+  </div>
+
+  <div class="field">
+    <label>연결 유형</label>
+    <select name="link_type" id="link_type" onchange="document.getElementById('link-url-field').style.display = this.value === 'external' ? 'block' : 'none';">
+      <option value="external" {% if not edit_icon or edit_icon.link_type == 'external' %}selected{% endif %}>외부/내부 링크로 이동</option>
+      <option value="calendar" {% if edit_icon and edit_icon.link_type == 'calendar' %}selected{% endif %}>대회 캘린더로 이동 (대회 아이콘용)</option>
+    </select>
+  </div>
+  <div class="field" id="link-url-field" style="{% if edit_icon and edit_icon.link_type == 'calendar' %}display:none;{% endif %}">
+    <label>이동할 주소</label>
+    <input name="link_url" value="{{ edit_icon.link_url if edit_icon else '' }}" placeholder="https://... 또는 /register 같은 내부 경로">
+  </div>
+
+  <div class="field"><label>정렬 순서 (작을수록 먼저, 최대 9개까지 홈에 표시)</label><input type="number" name="sort_order" value="{{ edit_icon.sort_order if edit_icon else 0 }}"></div>
+  <div class="field">
+    <label style="display:flex;align-items:center;gap:8px;font-weight:500;">
+      <input type="checkbox" name="is_active" style="width:auto;" {% if not edit_icon or edit_icon.is_active %}checked{% endif %}> 즉시 게시
+    </label>
+  </div>
+  <button type="submit">{{ '수정 저장' if edit_icon else '아이콘 등록' }}</button>
+  {% if edit_icon %}<a href="{{ url_for('admin_icons') }}" class="btn secondary" style="margin-left:10px;">취소</a>{% endif %}
+</form>
+
+<h2>등록된 아이콘 ({{ icons|selectattr('is_active')|list|length }}/9 게시중)</h2>
+<div class="tournament-list">
+  {% for ic in icons %}
+  <div class="tournament-item">
+    <div style="display:flex;align-items:center;gap:14px;">
+      {% if ic.icon_url %}<img src="{{ ic.icon_url }}" style="width:36px;height:36px;border-radius:10px;object-fit:cover;">
+      {% else %}<span class="icon-tile-img" style="width:36px;height:36px;border-radius:10px;"><span class="icon-tile-fallback" style="font-size:14px;">{{ ic.label[0] }}</span></span>{% endif %}
+      <div>
+        <strong>{{ ic.label }}</strong>
+        <div class="meta">{{ '대회 캘린더' if ic.link_type == 'calendar' else (ic.link_url or '링크 없음') }} · 순서 {{ ic.sort_order }}</div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span class="badge {% if not ic.is_active %}closed{% endif %}">{{ '게시중' if ic.is_active else '비공개' }}</span>
+      <a class="btn secondary" style="padding:8px 14px;font-size:12px;" href="{{ url_for('edit_icon', iid=ic.id) }}">수정</a>
+      <button class="secondary" style="padding:8px 14px;font-size:12px;" onclick="toggleIcon({{ ic.id }})">전환</button>
+      <button class="clay" style="padding:8px 14px;font-size:12px;" onclick="deleteIcon({{ ic.id }})">삭제</button>
+    </div>
+  </div>
+  {% else %}
+  <p>등록된 아이콘이 없습니다. 위에서 첫 아이콘을 만들어보세요.</p>
+  {% endfor %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+wireUploader("icon-file", "icon_url", "icon-preview");
+
+function toggleIcon(id) {
+  fetch(`/admin/icons/${id}/toggle`, {method: "POST"})
+    .then(r => r.json()).then(() => { toast("아이콘 상태가 바뀌었습니다.", "success"); setTimeout(() => location.reload(), 500); });
+}
+function deleteIcon(id) {
+  if (!confirm("이 아이콘을 삭제할까요?")) return;
+  fetch(`/admin/icons/${id}/delete`, {method: "POST"})
+    .then(r => r.json()).then(() => { toast("아이콘이 삭제되었습니다.", "success"); setTimeout(() => location.reload(), 500); });
+}
+</script>
+{% endblock %}

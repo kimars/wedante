@@ -1,15 +1,18 @@
 import os
 import math
 import random
-from datetime import datetime
+import uuid
+from datetime import datetime, date
+from calendar import Calendar
 
 from flask import Flask, render_template, request, redirect, url_for, jsonify, flash, abort
 from flask_login import (LoginManager, login_user, logout_user, login_required,
                           current_user, UserMixin)
 from flask_socketio import SocketIO, emit, join_room
 from dotenv import load_dotenv
+from werkzeug.utils import secure_filename
 
-from models import db, Organizer, User, Tournament, Match, CallLog, SmsLog, Banner, CALL_TYPES
+from models import db, Organizer, User, Tournament, TournamentParticipant, Match, CallLog, SmsLog, Banner, QuickIcon, CALL_TYPES
 from sms import send_sms
 
 load_dotenv()
@@ -21,6 +24,10 @@ app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
     "DATABASE_URL", "postgresql://wedante:wedante@localhost:5432/wedante"
 )
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+UPLOAD_DIR = os.path.join(app.root_path, "static", "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+ALLOWED_UPLOAD_EXT = {"png", "jpg", "jpeg", "gif", "webp", "svg"}
 
 db.init_app(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
@@ -142,7 +149,9 @@ def index():
     organizers = Organizer.query.all()
     tournaments = Tournament.query.order_by(Tournament.event_date.desc()).limit(20).all()
     banners = Banner.query.filter_by(is_active=True).order_by(Banner.sort_order, Banner.id).all()
-    return render_template("index.html", organizers=organizers, tournaments=tournaments, banners=banners)
+    icons = QuickIcon.query.filter_by(is_active=True).order_by(QuickIcon.sort_order, QuickIcon.id).limit(9).all()
+    return render_template("index.html", organizers=organizers, tournaments=tournaments,
+                            banners=banners, icons=icons)
 
 
 @app.route("/org/<slug>")
@@ -151,7 +160,7 @@ def organizer_page(slug):
     tournaments = Tournament.query.filter_by(organizer_id=org.id).order_by(
         Tournament.event_date.desc()).all()
     return render_template("index.html", organizers=[org], tournaments=tournaments,
-                            active_org=org, banners=[])
+                            active_org=org, banners=[], icons=[])
 
 
 @app.route("/register", methods=["GET", "POST"])
@@ -199,8 +208,14 @@ def tournament_page(tid):
     groups = {}
     for m in prelim:
         groups.setdefault(m.group_no, []).append(m)
+    my_participation = None
+    if current_user.is_authenticated:
+        my_participation = TournamentParticipant.query.filter_by(
+            tournament_id=tid, user_id=current_user.id).first()
+    participant_count = TournamentParticipant.query.filter_by(tournament_id=tid).count()
     return render_template("tournament.html", t=t, groups=groups, main=main,
-                            call_types=CALL_TYPES)
+                            call_types=CALL_TYPES, my_participation=my_participation,
+                            participant_count=participant_count)
 
 
 @app.route("/admin/banners")
@@ -281,6 +296,138 @@ def delete_banner(bid):
     return jsonify({"ok": True})
 
 
+@app.route("/admin/upload", methods=["POST"])
+@login_required
+def admin_upload():
+    """아이콘/배너용 이미지 파일 업로드. 관리자만 가능.
+    주의: Railway 등 컨테이너 배포 환경은 파일시스템이 재배포 시 초기화될 수 있어
+    영구 보관이 필요하면 Volume 연결 또는 외부 이미지 URL 사용을 권장."""
+    if not current_user.is_admin:
+        abort(403)
+    file = request.files.get("file")
+    if not file or file.filename == "":
+        return jsonify({"error": "파일이 없습니다"}), 400
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if ext not in ALLOWED_UPLOAD_EXT:
+        return jsonify({"error": "지원하지 않는 파일 형식입니다 (png/jpg/gif/webp/svg만 가능)"}), 400
+    filename = f"{uuid.uuid4().hex}.{ext}"
+    file.save(os.path.join(UPLOAD_DIR, secure_filename(filename)))
+    return jsonify({"ok": True, "url": url_for("static", filename=f"uploads/{filename}")})
+
+
+@app.route("/admin/icons")
+@login_required
+def admin_icons():
+    if not current_user.is_superadmin:
+        abort(403)
+    icons = QuickIcon.query.order_by(QuickIcon.sort_order, QuickIcon.id).all()
+    return render_template("admin_icons.html", icons=icons, edit_icon=None)
+
+
+@app.route("/admin/icons/new", methods=["GET", "POST"])
+@login_required
+def new_icon():
+    if not current_user.is_superadmin:
+        abort(403)
+    if request.method == "POST":
+        f = request.form
+        icon = QuickIcon(
+            label=f["label"], icon_url=f.get("icon_url") or None,
+            link_type=f.get("link_type") or "external",
+            link_url=f.get("link_url") or None,
+            sort_order=int(f.get("sort_order") or 0),
+            is_active=bool(f.get("is_active")),
+            created_by=current_user.id,
+        )
+        db.session.add(icon)
+        db.session.commit()
+        flash("아이콘이 등록되었습니다.")
+        return redirect(url_for("admin_icons"))
+    return render_template("admin_icons.html", icons=QuickIcon.query.all(), edit_icon=None, is_new=True)
+
+
+@app.route("/admin/icons/<int:iid>/edit", methods=["GET", "POST"])
+@login_required
+def edit_icon(iid):
+    if not current_user.is_superadmin:
+        abort(403)
+    icon = QuickIcon.query.get_or_404(iid)
+    if request.method == "POST":
+        f = request.form
+        icon.label = f["label"]
+        icon.icon_url = f.get("icon_url") or None
+        icon.link_type = f.get("link_type") or "external"
+        icon.link_url = f.get("link_url") or None
+        icon.sort_order = int(f.get("sort_order") or 0)
+        icon.is_active = bool(f.get("is_active"))
+        db.session.commit()
+        flash("아이콘이 수정되었습니다.")
+        return redirect(url_for("admin_icons"))
+    return render_template("admin_icons.html", icons=QuickIcon.query.all(), edit_icon=icon)
+
+
+@app.route("/admin/icons/<int:iid>/toggle", methods=["POST"])
+@login_required
+def toggle_icon(iid):
+    if not current_user.is_superadmin:
+        abort(403)
+    icon = QuickIcon.query.get_or_404(iid)
+    icon.is_active = not icon.is_active
+    db.session.commit()
+    return jsonify({"ok": True, "is_active": icon.is_active})
+
+
+@app.route("/admin/icons/<int:iid>/delete", methods=["POST"])
+@login_required
+def delete_icon(iid):
+    if not current_user.is_superadmin:
+        abort(403)
+    icon = QuickIcon.query.get_or_404(iid)
+    db.session.delete(icon)
+    db.session.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/calendar")
+def tournament_calendar():
+    """대회 아이콘을 누르면 뜨는 월별 캘린더. 날짜별로 대회가 표시되고,
+    관리자는 특정 날짜를 눌러 그 날짜로 대회를 바로 만들 수 있다."""
+    today = date.today()
+    year = int(request.args.get("year") or today.year)
+    month = int(request.args.get("month") or today.month)
+
+    cal = Calendar(firstweekday=6)  # 일요일 시작
+    weeks = cal.monthdatescalendar(year, month)
+
+    prefix = f"{year:04d}-{month:02d}"
+    tournaments = Tournament.query.filter(Tournament.event_date.like(f"{prefix}%")).all()
+    by_date = {}
+    for t in tournaments:
+        by_date.setdefault(t.event_date, []).append(t)
+
+    prev_year, prev_month = (year - 1, 12) if month == 1 else (year, month - 1)
+    next_year, next_month = (year + 1, 1) if month == 12 else (year, month + 1)
+
+    return render_template("calendar.html", weeks=weeks, year=year, month=month,
+                            by_date=by_date, today=today,
+                            prev_year=prev_year, prev_month=prev_month,
+                            next_year=next_year, next_month=next_month)
+
+
+@app.route("/api/tournaments/<int:tid>/status", methods=["POST"])
+@login_required
+def api_update_status(tid):
+    t = Tournament.query.get_or_404(tid)
+    if not current_user.is_admin:
+        abort(403)
+    status = request.json.get("status")
+    if status not in ("접수중", "접수마감", "진행중", "종료"):
+        return jsonify({"error": "잘못된 상태값입니다"}), 400
+    t.status = status
+    db.session.commit()
+    return jsonify({"ok": True, "status": t.status})
+
+
 @app.route("/admin")
 @login_required
 def admin_home():
@@ -305,13 +452,16 @@ def new_tournament():
             entry_fee=int(f.get("entry_fee") or 0),
             group_size=int(f.get("group_size") or 3),
             parking_url=f.get("parking_url") or None,
+            deposit_bank=f.get("deposit_bank") or None,
+            deposit_account=f.get("deposit_account") or None,
+            deposit_holder=f.get("deposit_holder") or None,
             status="접수중",
         )
         db.session.add(t)
         db.session.commit()
         flash("대회가 생성되었습니다.")
         return redirect(url_for("admin_dashboard", tid=t.id))
-    return render_template("new_tournament.html")
+    return render_template("new_tournament.html", prefill_date=request.args.get("date", ""))
 
 
 @app.route("/admin/organizers/new", methods=["GET", "POST"])
@@ -354,11 +504,15 @@ def admin_dashboard(tid):
     if not current_user.is_admin:
         abort(403)
     players = User.query.filter_by(organizer_id=t.organizer_id).all()
+    participants = TournamentParticipant.query.filter_by(tournament_id=tid).order_by(
+        TournamentParticipant.applied_at).all()
+    confirmed_ids = {p.user_id for p in participants if p.status == "확정"}
     calls = CallLog.query.filter_by(tournament_id=tid).order_by(CallLog.created_at.desc()).all()
     prelim = Match.query.filter_by(tournament_id=tid, stage="prelim").all()
     groups = sorted(set(m.group_no for m in prelim)) if prelim else []
     return render_template("admin_dashboard.html", t=t, players=players, calls=calls,
-                            groups=groups, call_types=CALL_TYPES)
+                            groups=groups, call_types=CALL_TYPES,
+                            participants=participants, confirmed_ids=confirmed_ids)
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +627,60 @@ def api_search_players(tid):
             "status": m.status, "score": m.score,
         })
     return jsonify({"results": results})
+
+
+@app.route("/api/tournaments/<int:tid>/apply", methods=["POST"])
+@login_required
+def api_apply_tournament(tid):
+    """선수가 '참가 신청' 버튼을 누르면 호출. 회원가입 시 정보를 그대로 쓰므로
+    이름/전화번호 등을 다시 입력할 필요가 없다."""
+    t = Tournament.query.get_or_404(tid)
+    existing = TournamentParticipant.query.filter_by(tournament_id=tid, user_id=current_user.id).first()
+    if existing:
+        return jsonify({"error": "이미 신청하셨습니다."}), 400
+    status = "확정" if not t.entry_fee else "대기"
+    p = TournamentParticipant(tournament_id=tid, user_id=current_user.id, status=status,
+                               confirmed_at=datetime.utcnow() if status == "확정" else None)
+    db.session.add(p)
+    db.session.commit()
+    return jsonify({"ok": True, "status": p.status})
+
+
+@app.route("/api/participants/<int:pid>/mark-paid", methods=["POST"])
+@login_required
+def api_mark_paid(pid):
+    """선수 본인이 '입금 완료' 버튼을 눌러 자진 신고 (관리자 확인 전 단계)"""
+    p = TournamentParticipant.query.get_or_404(pid)
+    if p.user_id != current_user.id:
+        abort(403)
+    p.status = "입금확인요청"
+    db.session.commit()
+    return jsonify({"ok": True, "status": p.status})
+
+
+@app.route("/api/participants/<int:pid>/confirm", methods=["POST"])
+@login_required
+def api_confirm_participant(pid):
+    """관리자가 입금 확인 후 참가를 확정 처리"""
+    p = TournamentParticipant.query.get_or_404(pid)
+    if not current_user.is_admin:
+        abort(403)
+    p.status = "확정"
+    p.confirmed_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"ok": True, "status": p.status})
+
+
+@app.route("/api/participants/<int:pid>/cancel", methods=["POST"])
+@login_required
+def api_cancel_participant(pid):
+    """본인 신청 취소 또는 관리자의 강제 취소"""
+    p = TournamentParticipant.query.get_or_404(pid)
+    if p.user_id != current_user.id and not current_user.is_admin:
+        abort(403)
+    db.session.delete(p)
+    db.session.commit()
+    return jsonify({"ok": True})
 
 
 # ---------------------------------------------------------------------------

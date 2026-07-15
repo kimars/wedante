@@ -89,10 +89,31 @@ class Tournament(db.Model):
     status = db.Column(db.String(20), default="접수중")  # 접수중 / 접수마감 / 진행중 / 종료
     group_size = db.Column(db.Integer, default=3)    # 예선 조 인원
     parking_url = db.Column(db.String(400))          # 주차등록 링크 (외부)
+    deposit_bank = db.Column(db.String(40))          # 참가비 입금계좌 은행
+    deposit_account = db.Column(db.String(40))       # 참가비 입금계좌 번호
+    deposit_holder = db.Column(db.String(40))        # 예금주
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     matches = db.relationship("Match", backref="tournament", lazy=True,
                                cascade="all, delete-orphan")
+
+
+class TournamentParticipant(db.Model):
+    """선수가 대회 페이지에서 '참가 신청' 버튼을 눌러 등록. 회원가입 시 입력한 정보를
+    그대로 쓰기 때문에 매번 인적사항을 다시 적을 필요가 없다."""
+    __tablename__ = "tournament_participants"
+    id = db.Column(db.Integer, primary_key=True)
+    tournament_id = db.Column(db.Integer, db.ForeignKey("tournaments.id"), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    # 대기 -> 입금확인요청(선수가 입금했다고 표시) -> 확정(관리자가 확인)  |  참가비 0원이면 바로 확정
+    status = db.Column(db.String(20), default="대기")
+    applied_at = db.Column(db.DateTime, default=datetime.utcnow)
+    confirmed_at = db.Column(db.DateTime)
+
+    tournament = db.relationship("Tournament")
+    user = db.relationship("User")
+
+    __table_args__ = (db.UniqueConstraint("tournament_id", "user_id", name="uq_tournament_user"),)
 
 
 class Match(db.Model):
@@ -167,6 +188,21 @@ class Banner(db.Model):
     bg_from = db.Column(db.String(20), default="#0E9F8C")
     bg_to = db.Column(db.String(20), default="#0B7A6B")
     duration_seconds = db.Column(db.Integer, default=5)   # 이 배너를 몇 초간 보여줄지
+    sort_order = db.Column(db.Integer, default=0)
+    is_active = db.Column(db.Boolean, default=True)
+    created_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class QuickIcon(db.Model):
+    """홈 화면 배너 아래 바로가기 아이콘 9개. 최상위 관리자만 등록/수정 가능.
+    link_type='calendar' 이면 내장 대회 캘린더로 이동, 'external'이면 link_url로 이동."""
+    __tablename__ = "quick_icons"
+    id = db.Column(db.Integer, primary_key=True)
+    label = db.Column(db.String(40), nullable=False)
+    icon_url = db.Column(db.Text)              # 업로드했거나 외부에서 가져온 아이콘 이미지 주소
+    link_type = db.Column(db.String(20), default="external")   # external | calendar
+    link_url = db.Column(db.Text)              # link_type == external 일 때 이동할 주소
     sort_order = db.Column(db.Integer, default=0)
     is_active = db.Column(db.Boolean, default=True)
     created_by = db.Column(db.Integer, db.ForeignKey("users.id"))

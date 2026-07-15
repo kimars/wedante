@@ -37,6 +37,22 @@
 </section>
 {% endif %}
 
+{% if icons %}
+<div class="icon-grid">
+  {% for ic in icons %}
+  <a class="icon-tile" href="{{ url_for('tournament_calendar') if ic.link_type == 'calendar' else (ic.link_url or '#') }}"
+     {% if ic.link_type == 'external' %}target="_blank" rel="noopener"{% endif %}
+     style="animation-delay:{{ loop.index0 * 0.04 }}s">
+    <span class="icon-tile-img">
+      {% if ic.icon_url %}<img src="{{ ic.icon_url }}" alt="{{ ic.label }}">
+      {% else %}<span class="icon-tile-fallback">{{ ic.label[0] }}</span>{% endif %}
+    </span>
+    <span class="icon-tile-label">{{ ic.label }}</span>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
 {% if active_org %}
 <h2>{{ active_org.name }} 대회 목록</h2>
 {% else %}
@@ -50,7 +66,7 @@
       <strong>{{ t.title }}</strong>
       <div class="meta">{{ t.event_date }} · {{ t.location }} · 참가비 {{ "{:,}".format(t.entry_fee) }}원</div>
     </div>
-    <span class="badge {% if t.status == '접수마감' %}closed{% endif %}">{{ t.status }}</span>
+    <span class="badge {% if t.status in ['접수마감','종료'] %}closed{% elif t.status == '진행중' %}live{% endif %}">{{ t.status }}</span>
   </a>
   {% else %}
   <p>등록된 대회가 없습니다.</p>

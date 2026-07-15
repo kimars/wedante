@@ -3,25 +3,55 @@
 <span class="eyebrow">Organizer console</span>
 <h1>{{ t.title }} · 관리</h1>
 
+<div class="card card-row">
+  <span><strong>대회 상태</strong> — 현재: <span class="badge {% if t.status in ['접수마감','종료'] %}closed{% elif t.status == '진행중' %}live{% endif %}">{{ t.status }}</span></span>
+  <span style="display:flex;gap:8px;">
+    <select id="status-select">
+      {% for s in ['접수중','접수마감','진행중','종료'] %}
+      <option value="{{ s }}" {% if t.status == s %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+    <button class="secondary" onclick="updateStatus()">상태 변경</button>
+  </span>
+</div>
+
 <h2>1. 예선 대진표 생성</h2>
 <div class="card">
   <p style="font-size:13px;color:var(--ink-soft);">참가자를 선택하고 조를 생성하면 조별 라운드로빈 경기와 본선 빈 대진표가 자동으로 만들어집니다.</p>
-  <div style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:10px;margin:10px 0;">
+  <div style="max-height:180px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:10px;margin:10px 0;">
     {% for p in players %}
     <label style="display:block;font-size:14px;padding:3px 0;">
-      <input type="checkbox" class="player-check" value="{{ p.id }}"> {{ p.name }} ({{ p.phone }})
+      <input type="checkbox" class="player-check" value="{{ p.id }}" {% if p.id in confirmed_ids %}checked{% endif %}> {{ p.name }} ({{ p.phone }}){% if p.id in confirmed_ids %} <span style="color:var(--primary);font-size:12px;">· 신청확정</span>{% endif %}
     </label>
     {% endfor %}
   </div>
   <button onclick="generateDraw()">예선 대진표 생성</button>
 </div>
 
-<h2>2. 예선 경기 결과 입력</h2>
+<h2>2. 참가 신청자 관리</h2>
+<div class="card">
+  <p style="font-size:13px;color:var(--ink-soft);">선수가 대회 페이지에서 "참가 신청" 버튼을 누르면 여기에 표시됩니다. 입금을 확인하셨으면 "확정" 버튼을 눌러주세요.</p>
+  <div id="participant-list">
+    {% for p in participants %}
+    <div class="card-row" style="border-bottom:1px solid var(--border);padding:8px 0;" id="participant-{{ p.id }}">
+      <span>{{ p.user.name }} ({{ p.user.phone }}) · {{ p.applied_at.strftime('%m/%d %H:%M') }} 신청</span>
+      <span style="display:flex;align-items:center;gap:8px;">
+        <span class="badge {% if p.status == '확정' %}live{% elif p.status == '대기' %}closed{% endif %}">{{ p.status }}</span>
+        {% if p.status != '확정' %}<button class="secondary" onclick="confirmParticipant({{ p.id }})">확정 처리</button>{% endif %}
+      </span>
+    </div>
+    {% else %}
+    <p style="color:var(--ink-faint);margin:0;">아직 신청한 선수가 없습니다.</p>
+    {% endfor %}
+  </div>
+</div>
+
+<h2>3. 예선 경기 결과 입력</h2>
 <div class="card">
   <div id="prelim-admin-list"></div>
 </div>
 
-<h2>3. 조별 우승자 확정 → 본선 자동 반영</h2>
+<h2>4. 조별 우승자 확정 → 본선 자동 반영</h2>
 <div class="card">
   {% for g in groups %}
   <div class="card-row" style="margin-bottom:8px;">
@@ -34,19 +64,19 @@
   {% endfor %}
 </div>
 
-<h2>4. 본선 스코어 입력</h2>
+<h2>5. 본선 스코어 입력</h2>
 <div class="card">
   <div id="main-admin-list"></div>
 </div>
 
-<h2>5. 예선 안내 문자 발송</h2>
+<h2>6. 예선 안내 문자 발송</h2>
 <div class="card">
   <textarea id="sms-msg" rows="3" style="width:100%;padding:10px;border:1px solid var(--line);border-radius:4px;" placeholder="비워두면 기본 안내 문구가 발송됩니다."></textarea>
   <div style="margin-top:10px;"><button class="clay" onclick="sendNotify()">체크된 참가자에게 문자 발송</button></div>
   <p id="sms-result" style="font-size:13px;margin-top:8px;"></p>
 </div>
 
-<h2>6. 실시간 콜 현황</h2>
+<h2>7. 실시간 콜 현황</h2>
 <div id="call-feed">
   {% for c in calls %}
   <div class="call-feed-item {% if c.status == '처리완료' %}resolved{% endif %}" id="call-{{ c.id }}">
@@ -68,6 +98,21 @@ socket.on("bracket_update", () => loadDraw());
 
 function checkedPlayers() {
   return [...document.querySelectorAll(".player-check:checked")].map(c => parseInt(c.value));
+}
+
+function updateStatus() {
+  const status = document.getElementById("status-select").value;
+  fetch(`/api/tournaments/${TID}/status`, {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({status})
+  }).then(r => r.json()).then(() => { toast("대회 상태가 변경되었습니다.", "success"); setTimeout(() => location.reload(), 600); })
+    .catch(() => toast("변경에 실패했습니다.", "error"));
+}
+
+function confirmParticipant(pid) {
+  fetch(`/api/participants/${pid}/confirm`, { method: "POST" })
+    .then(r => r.json()).then(() => { toast("참가가 확정되었습니다.", "success"); setTimeout(() => location.reload(), 600); })
+    .catch(() => toast("처리에 실패했습니다.", "error"));
 }
 
 function generateDraw() {

@@ -1,6 +1,6 @@
 """데모용 샘플 데이터 생성. 실행: python seed_demo.py"""
 from app import app
-from models import db, Organizer, User, Tournament, Banner
+from models import db, Organizer, User, Tournament, Banner, QuickIcon
 
 NAMES = ["황지연", "정승빈", "임유정", "박지희", "이사론", "이명재",
          "박명희", "정승은", "조유미", "장하리", "김창현", "이승미"]
@@ -54,6 +54,20 @@ with app.app_context():
             bg_from="#FF6B4A", bg_to="#0B1220", sort_order=1, is_active=True,
             created_by=admin.id,
         ))
+        db.session.commit()
+
+    if QuickIcon.query.count() == 0:
+        sample_icons = [
+            ("대회", "calendar", None, 0),
+            ("회원가입", "external", "/register", 1),
+            ("대진표", "external", f"/tournament/{t.id}", 2),
+            ("공지사항", "external", "/", 3),
+            ("밴드", "external", "https://www.band.us/", 4),
+            ("유튜브", "external", "https://www.youtube.com/", 5),
+        ]
+        for label, ltype, link, order in sample_icons:
+            db.session.add(QuickIcon(label=label, link_type=ltype, link_url=link,
+                                      sort_order=order, is_active=True, created_by=admin.id))
         db.session.commit()
 
     print(f"완료! 관리자(최상위) 로그인: 01000000000 / admin1234  (대회 ID={t.id})")
