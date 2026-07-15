@@ -10,6 +10,7 @@
   <a class="quick-link" href="tel:010-6890-9123">📞 결과보고/본부요청 010-6890-9123</a>
 </div>
 
+{% if not current_user.is_admin %}
 <div class="card" id="apply-card">
   <div class="card-row">
     <div>
@@ -62,6 +63,7 @@
   </div>
   {% endif %}
 </div>
+{% endif %}
 
 <div class="card">
   <strong>선수 검색</strong>

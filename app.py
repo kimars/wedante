@@ -648,6 +648,8 @@ def api_apply_tournament(tid):
     """선수가 '참가 신청' 버튼을 누르면 호출. 회원가입 시 정보를 그대로 쓰므로
     이름/전화번호 등을 다시 입력할 필요가 없다."""
     t = Tournament.query.get_or_404(tid)
+    if current_user.is_admin:
+        return jsonify({"error": "관리자 계정은 대회에 참가 신청할 수 없습니다."}), 400
     existing = TournamentParticipant.query.filter_by(tournament_id=tid, user_id=current_user.id).first()
     if existing:
         return jsonify({"error": "이미 신청하셨습니다."}), 400
@@ -770,6 +772,31 @@ def api_update_refund_status(rid):
     db.session.commit()
     socketio.emit("refund_status", {"status": status}, room=f"refund_{rid}")
     return jsonify({"ok": True, "status": status})
+
+
+@app.route("/api/refunds/<int:rid>/end", methods=["POST"])
+@login_required
+def api_end_refund(rid):
+    """관리자가 '채팅 종료'를 누르면 채팅방과 메시지를 완전히 삭제한다."""
+    rr = RefundRequest.query.get_or_404(rid)
+    if not current_user.is_admin:
+        abort(403)
+    RefundMessage.query.filter_by(refund_request_id=rid).delete()
+    db.session.delete(rr)
+    db.session.commit()
+    socketio.emit("refund_ended", {}, room=f"refund_{rid}")
+    return jsonify({"ok": True})
+
+
+@app.route("/admin/refunds")
+@login_required
+def admin_refunds():
+    if not current_user.is_admin:
+        abort(403)
+    requests = (RefundRequest.query.join(Tournament)
+                .filter(Tournament.organizer_id == current_user.organizer_id)
+                .order_by(RefundRequest.created_at.desc()).all())
+    return render_template("admin_refunds.html", requests=requests)
 
 
 # ---------------------------------------------------------------------------

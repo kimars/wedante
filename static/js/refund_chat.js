@@ -30,6 +30,14 @@ function openRefundChat(refundId, containerId) {
     const statusEl = container.querySelector(".refund-status-label");
     if (statusEl) statusEl.textContent = d.status;
   });
+  socket.off("refund_ended");
+  socket.on("refund_ended", () => {
+    const list = container.querySelector(".refund-messages");
+    if (list) list.insertAdjacentHTML("beforeend",
+      `<p style="color:var(--ink-faint);font-size:13px;text-align:center;margin:12px 0;">주최자가 이 문의를 종료했습니다.</p>`);
+    const input = container.querySelector(".refund-input");
+    if (input) input.disabled = true;
+  });
 }
 
 function loadRefundMessages(refundId, containerId) {

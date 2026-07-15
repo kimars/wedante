@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block content %}
+<span class="eyebrow">Organizer console</span>
+<h1>환불 관리</h1>
+<p style="color:var(--ink-soft);max-width:560px;">선수별로 1:1 채팅방이 만들어집니다. 대화로 상황을 확인한 뒤 "환불 완료"를 눌러 처리하거나, 더 이상 필요 없으면 "채팅 종료"로 삭제하세요.</p>
+
+<div id="refund-list">
+  {% for r in requests %}
+  <div class="card" id="refund-row-{{ r.id }}">
+    <div class="card-row">
+      <div>
+        <strong>{{ r.user.name }} ({{ r.user.phone }})</strong>
+        <div class="meta" style="margin-top:4px;">{{ r.tournament.title }} · {{ r.created_at.strftime('%m/%d %H:%M') }} 요청</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span class="badge {% if r.status == '완료' %}live{% elif r.status == '거절' %}closed{% endif %}">{{ r.status }}</span>
+        <button class="secondary" onclick="openAdminRefundChat({{ r.id }})">채팅 열기</button>
+        <button class="secondary" onclick="completeRefund({{ r.id }})">환불 완료</button>
+        <button class="clay" onclick="endRefundChat({{ r.id }})">채팅 종료</button>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <p style="color:var(--ink-faint);">아직 환불 요청이 없습니다.</p>
+  {% endfor %}
+</div>
+
+<div class="refund-chat-box card" id="admin-refund-box" style="display:none;">
+  <div class="card-row" style="margin-bottom:10px;">
+    <strong style="font-size:14px;">환불 문의 채팅</strong>
+    <span class="badge refund-status-label">요청중</span>
+  </div>
+  <div class="refund-messages"></div>
+  <div class="refund-input-row">
+    <input class="refund-input" placeholder="답변을 입력하세요" onkeydown="if(event.key==='Enter'){sendRefundMessage('admin-refund-box');}">
+    <button onclick="sendRefundMessage('admin-refund-box')">전송</button>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function openAdminRefundChat(refundId) {
+  openRefundChat(refundId, "admin-refund-box");
+  document.getElementById("admin-refund-box").scrollIntoView({behavior: "smooth", block: "center"});
+}
+
+function completeRefund(refundId) {
+  fetch(`/api/refunds/${refundId}/status`, {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({status: "완료"})
+  }).then(r => r.json()).then(() => { toast("환불 완료로 처리했습니다.", "success"); setTimeout(() => location.reload(), 600); })
+    .catch(() => toast("처리에 실패했습니다.", "error"));
+}
+
+function endRefundChat(refundId) {
+  if (!confirm("이 채팅을 종료할까요? 대화 내용이 모두 삭제되며 되돌릴 수 없습니다.")) return;
+  fetch(`/api/refunds/${refundId}/end`, { method: "POST" })
+    .then(r => r.json()).then(() => {
+      toast("채팅이 종료되었습니다.", "success");
+      const row = document.getElementById(`refund-row-${refundId}`);
+      if (row) row.remove();
+      const box = document.getElementById("admin-refund-box");
+      if (box.dataset.refundId == refundId) box.style.display = "none";
+    }).catch(() => toast("종료에 실패했습니다.", "error"));
+}
+</script>
+{% endblock %}
