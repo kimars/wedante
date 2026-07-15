@@ -6,6 +6,7 @@
   <div class="banner-track">
     {% for b in banners %}
     <a class="banner-slide {{ 'active' if loop.first else '' }}" data-index="{{ loop.index0 }}"
+       data-duration="{{ (b.duration_seconds or 5) * 1000 }}"
        href="{{ b.link_url or '#' }}"
        style="--from:{{ b.bg_from }};--to:{{ b.bg_to }};{% if b.image_url %}background-image:url('{{ b.image_url }}');{% endif %}">
       <div class="banner-overlay"></div>
@@ -19,6 +20,8 @@
     {% endfor %}
   </div>
   {% if banners|length > 1 %}
+  <button class="banner-arrow banner-arrow-prev" id="banner-prev" aria-label="이전 배너">‹</button>
+  <button class="banner-arrow banner-arrow-next" id="banner-next" aria-label="다음 배너">›</button>
   <div class="banner-dots">
     {% for b in banners %}
     <button class="banner-dot {{ 'active' if loop.first else '' }}" data-index="{{ loop.index0 }}" aria-label="배너 {{ loop.index }}"></button>
@@ -72,6 +75,9 @@
 (function(){
   const slides = document.querySelectorAll(".banner-slide");
   const dots = document.querySelectorAll(".banner-dot");
+  const prevBtn = document.getElementById("banner-prev");
+  const nextBtn = document.getElementById("banner-next");
+  const track = document.querySelector(".banner-track");
   if (slides.length <= 1) return;
   let idx = 0, timer;
 
@@ -82,14 +88,30 @@
     slides[idx].classList.add("active");
     dots[idx] && dots[idx].classList.add("active");
   }
-  function next() { go(idx + 1); }
-  function restart() { clearInterval(timer); timer = setInterval(next, 4500); }
+  function next() { go(idx + 1); restart(); }
+  function prev() { go(idx - 1); restart(); }
+  function restart() {
+    clearInterval(timer);
+    const duration = parseInt(slides[idx].dataset.duration || "5000", 10);
+    timer = setInterval(() => go(idx + 1), duration);
+  }
 
-  dots.forEach(d => d.addEventListener("click", (e) => {
-    e.preventDefault();
-    go(parseInt(d.dataset.index));
-    restart();
-  }));
+  dots.forEach(d => d.addEventListener("click", (e) => { e.preventDefault(); go(parseInt(d.dataset.index)); restart(); }));
+  if (nextBtn) nextBtn.addEventListener("click", (e) => { e.preventDefault(); next(); });
+  if (prevBtn) prevBtn.addEventListener("click", (e) => { e.preventDefault(); prev(); });
+
+  // 스와이프(터치)로도 넘길 수 있게
+  let touchStartX = null;
+  if (track) {
+    track.addEventListener("touchstart", (e) => { touchStartX = e.touches[0].clientX; }, {passive: true});
+    track.addEventListener("touchend", (e) => {
+      if (touchStartX === null) return;
+      const dx = e.changedTouches[0].clientX - touchStartX;
+      if (Math.abs(dx) > 40) { dx < 0 ? next() : prev(); }
+      touchStartX = null;
+    }, {passive: true});
+  }
+
   restart();
 })();
 </script>

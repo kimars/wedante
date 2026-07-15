@@ -224,6 +224,7 @@ def new_banner():
             image_url=f.get("image_url") or None, link_url=f.get("link_url") or None,
             button_text=f.get("button_text") or "자세히 보기",
             bg_from=f.get("bg_from") or "#0E9F8C", bg_to=f.get("bg_to") or "#0B7A6B",
+            duration_seconds=int(f.get("duration_seconds") or 5),
             sort_order=int(f.get("sort_order") or 0),
             is_active=bool(f.get("is_active")),
             created_by=current_user.id,
@@ -249,6 +250,7 @@ def edit_banner(bid):
         b.button_text = f.get("button_text") or "자세히 보기"
         b.bg_from = f.get("bg_from") or "#0E9F8C"
         b.bg_to = f.get("bg_to") or "#0B7A6B"
+        b.duration_seconds = int(f.get("duration_seconds") or 5)
         b.sort_order = int(f.get("sort_order") or 0)
         b.is_active = bool(f.get("is_active"))
         db.session.commit()

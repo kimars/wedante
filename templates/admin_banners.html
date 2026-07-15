@@ -16,6 +16,7 @@
     <div class="field" style="flex:1;"><label>배경색 (끝)</label><input type="color" name="bg_to" value="{{ edit_banner.bg_to if edit_banner else '#0B7A6B' }}"></div>
   </div>
   <div class="field"><label>정렬 순서 (작을수록 먼저)</label><input type="number" name="sort_order" value="{{ edit_banner.sort_order if edit_banner else 0 }}"></div>
+  <div class="field"><label>노출 시간 (초) — 이 배너를 몇 초간 보여줄지</label><input type="number" min="2" max="30" name="duration_seconds" value="{{ edit_banner.duration_seconds if edit_banner else 5 }}"></div>
   <div class="field">
     <label style="display:flex;align-items:center;gap:8px;font-weight:500;">
       <input type="checkbox" name="is_active" style="width:auto;" {% if not edit_banner or edit_banner.is_active %}checked{% endif %}> 즉시 게시 (체크 해제 시 임시저장)
@@ -31,7 +32,7 @@
   <div class="tournament-item">
     <div>
       <strong>{{ b.title }}</strong>
-      <div class="meta">{{ b.subtitle or '' }} · 순서 {{ b.sort_order }}</div>
+      <div class="meta">{{ b.subtitle or '' }} · 순서 {{ b.sort_order }} · {{ b.duration_seconds }}초 노출</div>
     </div>
     <div style="display:flex;align-items:center;gap:10px;">
       <span class="badge {% if not b.is_active %}closed{% endif %}">{{ '게시중' if b.is_active else '비공개' }}</span>

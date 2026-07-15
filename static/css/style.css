@@ -152,6 +152,23 @@ h2::before { content: ""; width: 7px; height: 20px; border-radius: 4px; backgrou
 .banner-dot.active { width: 26px; background: #fff; }
 .banner-dot:hover { background: rgba(255,255,255,.75); }
 
+.banner-arrow {
+  position: absolute; top: 50%; transform: translateY(-50%); z-index: 3;
+  width: 42px; height: 42px; border-radius: 50%; border: none;
+  background: rgba(255,255,255,.16); color: #fff; font-size: 24px; line-height: 1;
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+  backdrop-filter: blur(6px);
+  opacity: 0; transition: opacity .25s var(--ease), background .25s var(--ease), transform .25s var(--ease-spring);
+}
+.banner-carousel:hover .banner-arrow { opacity: 1; }
+.banner-arrow:hover { background: rgba(255,255,255,.32); transform: translateY(-50%) scale(1.08); }
+.banner-arrow:active { transform: translateY(-50%) scale(.94); }
+.banner-arrow-prev { left: 18px; }
+.banner-arrow-next { right: 18px; }
+@media (max-width: 640px) {
+  .banner-arrow { opacity: 1; width: 34px; height: 34px; font-size: 19px; }
+}
+
 .hero {
   padding: 48px 40px; border-radius: var(--radius); margin-bottom: 8px; position: relative; overflow: hidden;
   background: var(--grad); box-shadow: var(--shadow-lg);

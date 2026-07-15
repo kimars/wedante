@@ -163,6 +163,7 @@ class Banner(db.Model):
     button_text = db.Column(db.String(40), default="자세히 보기")
     bg_from = db.Column(db.String(20), default="#0E9F8C")
     bg_to = db.Column(db.String(20), default="#0B7A6B")
+    duration_seconds = db.Column(db.Integer, default=5)   # 이 배너를 몇 초간 보여줄지
     sort_order = db.Column(db.Integer, default=0)
     is_active = db.Column(db.Boolean, default=True)
     created_by = db.Column(db.Integer, db.ForeignKey("users.id"))
