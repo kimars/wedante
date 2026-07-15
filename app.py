@@ -20,9 +20,12 @@ load_dotenv()
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-change-me")
 # 운영 기본값: PostgreSQL. 로컬에 Postgres가 없으면 .env에서 sqlite:///wedante.db 로 바꿔도 됩니다.
-app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
+_db_url = os.environ.get(
     "DATABASE_URL", "postgresql://wedante:wedante@localhost:5432/wedante"
 )
+if _db_url.startswith("postgresql://"):
+    _db_url = _db_url.replace("postgresql://", "postgresql+psycopg://", 1)
+app.config["SQLALCHEMY_DATABASE_URI"] = _db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 UPLOAD_DIR = os.path.join(app.root_path, "static", "uploads")
