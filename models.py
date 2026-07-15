@@ -158,8 +158,8 @@ class Banner(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(120), nullable=False)
     subtitle = db.Column(db.String(200))
-    image_url = db.Column(db.String(500))          # 없으면 그라디언트 배경 사용
-    link_url = db.Column(db.String(500))
+    image_url = db.Column(db.Text)          # 없으면 그라디언트 배경 사용
+    link_url = db.Column(db.Text)
     button_text = db.Column(db.String(40), default="자세히 보기")
     bg_from = db.Column(db.String(20), default="#0E9F8C")
     bg_to = db.Column(db.String(20), default="#0B7A6B")
