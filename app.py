@@ -1255,6 +1255,83 @@ def init_db():
         print("DB 초기화 완료. 관리자 로그인: 01000000000 / admin1234")
 
 
+import click
+
+@app.cli.command("reset-data")
+@click.option("--keep-banners", is_flag=True, default=False,
+              help="배너/아이콘/주최자 카테고리는 남기고 대회/회원만 삭제")
+@click.option("--yes", is_flag=True, default=False,
+              help="확인 프롬프트 건너뛰기 (스크립트/CI 용)")
+def reset_data(keep_banners, yes):
+    """최고 관리자(is_superadmin=True) 계정만 남기고 모든 데이터를 삭제합니다.
+    실행: flask --app app reset-data
+    옵션: --keep-banners 로 배너/아이콘/주최자 유지 가능"""
+
+    # 어떤 것들이 지워질지 미리 카운트
+    keep_users = User.query.filter_by(is_superadmin=True).all()
+    keep_ids = {u.id for u in keep_users}
+    to_delete_users = User.query.filter(~User.id.in_(keep_ids)).count() if keep_ids else User.query.count()
+
+    click.echo("\n[reset-data] 삭제될 데이터:")
+    click.echo(f"  - 대회 (Tournament):        {Tournament.query.count()}")
+    click.echo(f"  - 매치 (Match):             {Match.query.count()}")
+    click.echo(f"  - 참가자 신청:              {TournamentParticipant.query.count()}")
+    click.echo(f"  - 환불 요청/메시지:         {RefundRequest.query.count()} / {RefundMessage.query.count()}")
+    click.echo(f"  - 콜 로그 / 문자 로그:      {CallLog.query.count()} / {SmsLog.query.count()}")
+    click.echo(f"  - 전화 인증 토큰:           {PhoneVerification.query.count()}")
+    click.echo(f"  - 회원 (관리자 제외):       {to_delete_users}")
+    if not keep_banners:
+        click.echo(f"  - 배너 / 아이콘:            {Banner.query.count()} / {QuickIcon.query.count()}")
+        # 최고관리자가 다른 organizer 에 속하지 않는 경우 위단테만 유지
+        keep_org_ids = {u.organizer_id for u in keep_users if u.organizer_id}
+        others = Organizer.query.count() - len(keep_org_ids)
+        click.echo(f"  - 주최자 카테고리 (관리자 소속 외): {others}")
+    click.echo(f"\n[유지될 최고 관리자]: {len(keep_users)}명")
+    for u in keep_users:
+        click.echo(f"  · {u.name} ({u.phone})")
+
+    if not keep_users:
+        click.echo("\n⚠️  is_superadmin=True 인 계정이 없습니다. 이대로 진행하면 로그인할 계정이 사라집니다.")
+        if not yes:
+            click.confirm("그래도 진행할까요?", abort=True)
+
+    if not yes:
+        click.confirm("\n정말로 위 데이터를 삭제할까요? (되돌릴 수 없음)", abort=True)
+
+    # 자식 → 부모 순서로 삭제
+    click.echo("\n삭제 진행 중...")
+    RefundMessage.query.delete(synchronize_session=False)
+    RefundRequest.query.delete(synchronize_session=False)
+    TournamentParticipant.query.delete(synchronize_session=False)
+    CallLog.query.delete(synchronize_session=False)
+    SmsLog.query.delete(synchronize_session=False)
+    PhoneVerification.query.delete(synchronize_session=False)
+    # Match 는 Tournament cascade 로 함께 삭제됨. 안전 위해 명시적으로 먼저.
+    Match.query.delete(synchronize_session=False)
+    Tournament.query.delete(synchronize_session=False)
+    db.session.commit()
+
+    # 회원 삭제 (최고관리자 제외)
+    if keep_ids:
+        User.query.filter(~User.id.in_(keep_ids)).delete(synchronize_session=False)
+    else:
+        User.query.delete(synchronize_session=False)
+    db.session.commit()
+
+    if not keep_banners:
+        Banner.query.delete(synchronize_session=False)
+        QuickIcon.query.delete(synchronize_session=False)
+        # 최고관리자가 소속된 organizer 만 유지
+        keep_org_ids = {u.organizer_id for u in keep_users if u.organizer_id}
+        if keep_org_ids:
+            Organizer.query.filter(~Organizer.id.in_(keep_org_ids)).delete(synchronize_session=False)
+        else:
+            Organizer.query.delete(synchronize_session=False)
+        db.session.commit()
+
+    click.echo("✓ 삭제 완료. 최고 관리자 계정만 남아있습니다.")
+
+
 # gunicorn 부트 시(WSGI 임포트만으로 앱 시작) 스키마를 최신화한다
 with app.app_context():
     try:
