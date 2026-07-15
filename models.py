@@ -49,6 +49,7 @@ class User(db.Model, UserMixin):
     _refund_account_enc = db.Column("refund_account_enc", db.String(255))  # 암호화 저장
     password_hash = db.Column(db.String(255), nullable=False)
     is_admin = db.Column(db.Boolean, default=False)            # 주최측 관리자 여부
+    is_superadmin = db.Column(db.Boolean, default=False)       # 위단테 최상위 관리자(배너 등 전역설정)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def set_password(self, raw):
@@ -149,3 +150,20 @@ class SmsLog(db.Model):
     sent_at = db.Column(db.DateTime, default=datetime.utcnow)
     success = db.Column(db.Boolean, default=False)
     provider_response = db.Column(db.Text)
+
+
+class Banner(db.Model):
+    """홈 화면 상단 배너(캐러셀). 최상위 관리자(is_superadmin)만 등록/수정 가능."""
+    __tablename__ = "banners"
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(120), nullable=False)
+    subtitle = db.Column(db.String(200))
+    image_url = db.Column(db.String(500))          # 없으면 그라디언트 배경 사용
+    link_url = db.Column(db.String(500))
+    button_text = db.Column(db.String(40), default="자세히 보기")
+    bg_from = db.Column(db.String(20), default="#0E9F8C")
+    bg_to = db.Column(db.String(20), default="#0B7A6B")
+    sort_order = db.Column(db.Integer, default=0)
+    is_active = db.Column(db.Boolean, default=True)
+    created_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)

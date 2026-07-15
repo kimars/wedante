@@ -1,10 +1,38 @@
 {% extends "base.html" %}
 {% block content %}
+
+{% if banners %}
+<section class="banner-carousel" id="banner-carousel">
+  <div class="banner-track">
+    {% for b in banners %}
+    <a class="banner-slide {{ 'active' if loop.first else '' }}" data-index="{{ loop.index0 }}"
+       href="{{ b.link_url or '#' }}"
+       style="--from:{{ b.bg_from }};--to:{{ b.bg_to }};{% if b.image_url %}background-image:url('{{ b.image_url }}');{% endif %}">
+      <div class="banner-overlay"></div>
+      <div class="banner-copy">
+        <span class="eyebrow" style="color:rgba(255,255,255,.85);">Wedante</span>
+        <h1>{{ b.title }}</h1>
+        {% if b.subtitle %}<p>{{ b.subtitle }}</p>{% endif %}
+        <span class="btn banner-btn">{{ b.button_text }}</span>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  {% if banners|length > 1 %}
+  <div class="banner-dots">
+    {% for b in banners %}
+    <button class="banner-dot {{ 'active' if loop.first else '' }}" data-index="{{ loop.index0 }}" aria-label="배너 {{ loop.index }}"></button>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+{% else %}
 <section class="hero">
   <span class="eyebrow">Real-time bracket</span>
   <h1>위단테 실시간 대진표</h1>
   <p>예선 결과가 본선 대진표에 자동으로 반영됩니다. 대회를 선택해 실시간 진행 상황을 확인하세요.</p>
 </section>
+{% endif %}
 
 {% if active_org %}
 <h2>{{ active_org.name }} 대회 목록</h2>
@@ -14,7 +42,7 @@
 
 <div class="tournament-list">
   {% for t in tournaments %}
-  <a class="tournament-item" href="{{ url_for('tournament_page', tid=t.id) }}">
+  <a class="tournament-item" href="{{ url_for('tournament_page', tid=t.id) }}" style="animation-delay:{{ loop.index0 * 0.06 }}s">
     <div>
       <strong>{{ t.title }}</strong>
       <div class="meta">{{ t.event_date }} · {{ t.location }} · 참가비 {{ "{:,}".format(t.entry_fee) }}원</div>
@@ -30,11 +58,39 @@
 <h2>주최자 카테고리</h2>
 <div class="group-grid">
   {% for org in organizers %}
-  <a class="group-card" href="{{ url_for('organizer_page', slug=org.slug) }}" style="text-decoration:none;">
+  <a class="group-card" href="{{ url_for('organizer_page', slug=org.slug) }}" style="text-decoration:none;animation-delay:{{ loop.index0 * 0.06 }}s">
     <h3>{{ org.name }}</h3>
-    <p style="font-size:13px;color:var(--ink-soft);margin:0;">/org/{{ org.slug }}</p>
+    <p style="font-size:13px;color:var(--ink-faint);margin:0;">/org/{{ org.slug }}</p>
   </a>
   {% endfor %}
 </div>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function(){
+  const slides = document.querySelectorAll(".banner-slide");
+  const dots = document.querySelectorAll(".banner-dot");
+  if (slides.length <= 1) return;
+  let idx = 0, timer;
+
+  function go(i) {
+    slides[idx].classList.remove("active");
+    dots[idx] && dots[idx].classList.remove("active");
+    idx = (i + slides.length) % slides.length;
+    slides[idx].classList.add("active");
+    dots[idx] && dots[idx].classList.add("active");
+  }
+  function next() { go(idx + 1); }
+  function restart() { clearInterval(timer); timer = setInterval(next, 4500); }
+
+  dots.forEach(d => d.addEventListener("click", (e) => {
+    e.preventDefault();
+    go(parseInt(d.dataset.index));
+    restart();
+  }));
+  restart();
+})();
+</script>
 {% endblock %}

@@ -6,6 +6,9 @@
 <div class="card-row" style="margin-bottom:20px;">
   <a class="btn" href="{{ url_for('new_tournament') }}">+ 새 대회 만들기</a>
   <a class="btn secondary" href="{{ url_for('new_organizer') }}">+ 다른 주최자 카테고리 만들기</a>
+  {% if current_user.is_superadmin %}
+  <a class="btn secondary" href="{{ url_for('admin_banners') }}">★ 홈 배너 관리</a>
+  {% endif %}
 </div>
 
 <h2>내 대회 목록</h2>

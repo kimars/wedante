@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block content %}
+<span class="eyebrow">Superadmin</span>
+<h1>홈 배너 관리</h1>
+<p style="color:var(--ink-soft);max-width:520px;">앱을 열었을 때 첫 화면에 뜨는 배너입니다. 여러 개 등록하면 자동으로 넘어가는 캐러셀로 표시됩니다. 이 메뉴는 최상위 관리자만 접근할 수 있습니다.</p>
+
+<h2>{{ '배너 수정' if edit_banner else '새 배너 만들기' }}</h2>
+<form class="panel" method="post" action="{{ url_for('edit_banner', bid=edit_banner.id) if edit_banner else url_for('new_banner') }}" style="max-width:520px;">
+  <div class="field"><label>제목</label><input name="title" value="{{ edit_banner.title if edit_banner else '' }}" required></div>
+  <div class="field"><label>부제 / 설명</label><input name="subtitle" value="{{ edit_banner.subtitle if edit_banner else '' }}"></div>
+  <div class="field"><label>이미지 URL (비워두면 그라디언트 배경)</label><input name="image_url" value="{{ edit_banner.image_url if edit_banner else '' }}" placeholder="https://..."></div>
+  <div class="field"><label>클릭 시 이동할 링크</label><input name="link_url" value="{{ edit_banner.link_url if edit_banner else '' }}" placeholder="/tournament/1"></div>
+  <div class="field"><label>버튼 문구</label><input name="button_text" value="{{ edit_banner.button_text if edit_banner else '자세히 보기' }}"></div>
+  <div class="card-row">
+    <div class="field" style="flex:1;"><label>배경색 (시작)</label><input type="color" name="bg_from" value="{{ edit_banner.bg_from if edit_banner else '#0E9F8C' }}"></div>
+    <div class="field" style="flex:1;"><label>배경색 (끝)</label><input type="color" name="bg_to" value="{{ edit_banner.bg_to if edit_banner else '#0B7A6B' }}"></div>
+  </div>
+  <div class="field"><label>정렬 순서 (작을수록 먼저)</label><input type="number" name="sort_order" value="{{ edit_banner.sort_order if edit_banner else 0 }}"></div>
+  <div class="field">
+    <label style="display:flex;align-items:center;gap:8px;font-weight:500;">
+      <input type="checkbox" name="is_active" style="width:auto;" {% if not edit_banner or edit_banner.is_active %}checked{% endif %}> 즉시 게시 (체크 해제 시 임시저장)
+    </label>
+  </div>
+  <button type="submit">{{ '수정 저장' if edit_banner else '배너 등록' }}</button>
+  {% if edit_banner %}<a href="{{ url_for('admin_banners') }}" class="btn secondary" style="margin-left:10px;">취소</a>{% endif %}
+</form>
+
+<h2>등록된 배너</h2>
+<div class="tournament-list">
+  {% for b in banners %}
+  <div class="tournament-item">
+    <div>
+      <strong>{{ b.title }}</strong>
+      <div class="meta">{{ b.subtitle or '' }} · 순서 {{ b.sort_order }}</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span class="badge {% if not b.is_active %}closed{% endif %}">{{ '게시중' if b.is_active else '비공개' }}</span>
+      <a class="btn secondary" style="padding:8px 14px;font-size:12px;" href="{{ url_for('edit_banner', bid=b.id) }}">수정</a>
+      <button class="secondary" style="padding:8px 14px;font-size:12px;" onclick="toggleBanner({{ b.id }})">전환</button>
+      <button class="clay" style="padding:8px 14px;font-size:12px;" onclick="deleteBanner({{ b.id }})">삭제</button>
+    </div>
+  </div>
+  {% else %}
+  <p>등록된 배너가 없습니다. 위에서 첫 배너를 만들어보세요.</p>
+  {% endfor %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleBanner(id) {
+  fetch(`/admin/banners/${id}/toggle`, {method: "POST"})
+    .then(r => r.json()).then(() => { toast("배너 상태가 바뀌었습니다.", "success"); setTimeout(() => location.reload(), 500); });
+}
+function deleteBanner(id) {
+  if (!confirm("이 배너를 삭제할까요?")) return;
+  fetch(`/admin/banners/${id}/delete`, {method: "POST"})
+    .then(r => r.json()).then(() => { toast("배너가 삭제되었습니다.", "success"); setTimeout(() => location.reload(), 500); });
+}
+</script>
+{% endblock %}
