@@ -94,12 +94,34 @@
 <div id="call-feed">
   {% for c in calls %}
   <div class="call-feed-item {% if c.status == '처리완료' %}resolved{% endif %}" id="call-{{ c.id }}">
-    <span>[{{ c.created_at.strftime('%H:%M') }}] {{ c.user.name }} · {{ call_types.get(c.call_type, c.call_type) }}</span>
-    <button class="secondary" onclick="resolveCall({{ c.id }})">처리완료</button>
+    <div class="call-content">
+      <div>[{{ c.created_at.strftime('%H:%M') }}] <strong>{{ c.user.name }}</strong> · {{ call_types.get(c.call_type, c.call_type) }}{% if c.court %} · {{ c.court }}코트{% endif %}</div>
+      {% if c.message %}<div class="call-message-preview">"{{ c.message }}"</div>{% endif %}
+    </div>
+    <div class="call-actions">
+      <button class="secondary" onclick="openCallChat({{ c.id }})">💬 답장</button>
+      <button class="secondary" onclick="resolveCall({{ c.id }})">✓ 처리완료</button>
+    </div>
   </div>
   {% else %}
   <p>접수된 콜이 없습니다.</p>
   {% endfor %}
+</div>
+
+<!-- 콜 채팅 모달 (관리자용, tournament.html 과 동일 구조) -->
+<div id="call-chat-modal" class="modal-backdrop" style="display:none;">
+  <div class="modal-card" style="max-width:560px;">
+    <div class="card-row" style="margin-bottom:14px;">
+      <strong id="call-chat-title">콜 상세</strong>
+      <button class="secondary" onclick="closeCallChat()" style="padding:4px 10px;">닫기</button>
+    </div>
+    <div id="call-chat-meta" style="font-size:13px;color:var(--ink-soft);margin-bottom:12px;"></div>
+    <div id="call-chat-messages" class="call-chat-messages"></div>
+    <div class="refund-input-row" style="margin-top:12px;">
+      <input id="call-chat-input" class="refund-input" placeholder="답장을 입력하세요..." onkeydown="if(event.key==='Enter'){sendCallReply();}">
+      <button onclick="sendCallReply()">전송</button>
+    </div>
+  </div>
 </div>
 {% endblock %}
 
@@ -109,6 +131,67 @@ const TID = {{ t.id }};
 const socket = io();
 socket.on("connect", () => socket.emit("join_tournament", {tournament_id: TID, as_admin: true}));
 socket.on("bracket_update", () => loadDraw());
+
+function escapeHtml(s) {
+  return String(s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
+}
+
+// [4] 참가자 실시간 반영 - 관리자 대시보드가 새로고침 없이 바로 갱신됨
+socket.on("participant_update", (d) => {
+  const listEl = document.getElementById("participant-list");
+  if (!listEl) return;
+  const existing = document.getElementById(`participant-${d.participant_id}`);
+  if (d.action === "delete") {
+    if (existing) existing.remove();
+    // 리스트가 비었으면 안내 문구 복구
+    if (!listEl.querySelector(".card-row")) {
+      listEl.innerHTML = '<p style="color:var(--ink-faint);margin:0;">아직 신청한 선수가 없습니다.</p>';
+    }
+    return;
+  }
+  if (d.action === "new" && !existing) {
+    // "아직 신청 없음" placeholder 제거
+    const placeholder = listEl.querySelector("p");
+    if (placeholder) placeholder.remove();
+    const badgeClass = d.status === "확정" ? "live" : (d.status === "대기" ? "closed" : "");
+    listEl.insertAdjacentHTML("beforeend", `
+      <div class="card-row" style="border-bottom:1px solid var(--border);padding:8px 0;" id="participant-${d.participant_id}">
+        <span>${escapeHtml(d.user_name)} (${escapeHtml(d.user_phone)}) · ${escapeHtml(d.applied_at)} 신청</span>
+        <span style="display:flex;align-items:center;gap:8px;">
+          <span class="badge ${badgeClass}">${d.status}</span>
+          ${d.status !== "확정" ? `<button class="secondary" onclick="confirmParticipant(${d.participant_id})">확정 처리</button>` : ""}
+        </span>
+      </div>`);
+    toast(`새 참가 신청: ${d.user_name}`, "success");
+    return;
+  }
+  if (d.action === "update" && existing) {
+    const badge = existing.querySelector(".badge");
+    if (badge) {
+      badge.innerText = d.status;
+      badge.classList.remove("live", "closed");
+      if (d.status === "확정") badge.classList.add("live");
+      else if (d.status === "대기") badge.classList.add("closed");
+    }
+    if (d.status === "확정") {
+      const btn = existing.querySelector("button");
+      if (btn) btn.remove();
+    }
+  }
+});
+
+// [4] 대회 상태 실시간 반영 (관리자 대시보드에도)
+socket.on("tournament_status", (d) => {
+  const badge = document.querySelector(".card-row .badge");
+  if (badge) badge.innerText = d.status;
+  const sel = document.getElementById("status-select");
+  if (sel && sel.value !== d.status) sel.value = d.status;
+});
+
+// [5] 대회 종료 알림
+socket.on("tournament_finished", (d) => {
+  toast(`🏆 대회 종료 - 우승: ${d.winner_name || '?'}`, "success");
+});
 
 function checkedPlayers() {
   return [...document.querySelectorAll(".player-check:checked")].map(c => parseInt(c.value));
@@ -158,7 +241,7 @@ function collectManualGroups() {
 function updateStatus() {
   const status = document.getElementById("status-select").value;
   apiPost(`/api/tournaments/${TID}/status`, {status})
-    .then(() => { toast("대회 상태가 변경되었습니다.", "success"); setTimeout(() => location.reload(), 600); })
+    .then(() => toast("대회 상태가 변경되었습니다.", "success"))
     .catch((err) => toast(err.message, "error"));
 }
 
@@ -179,7 +262,7 @@ function deleteTournament() {
 
 function confirmParticipant(pid) {
   apiPost(`/api/participants/${pid}/confirm`)
-    .then(() => { toast("참가가 확정되었습니다.", "success"); setTimeout(() => location.reload(), 600); })
+    .then(() => toast("참가가 확정되었습니다.", "success"))
     .catch((err) => toast(err.message, "error"));
 }
 
@@ -242,12 +325,73 @@ function resolveCall(cid) {
 
 socket.on("new_call", (c) => {
   const feed = document.getElementById("call-feed");
+  // "접수된 콜 없음" placeholder 제거
+  const placeholder = feed.querySelector("p");
+  if (placeholder) placeholder.remove();
   const div = document.createElement("div");
   div.className = "call-feed-item";
   div.id = `call-${c.id}`;
-  div.innerHTML = `<span>[${c.created_at}] ${c.player} · ${c.type}${c.court ? " · " + c.court + "코트" : ""}</span>
-    <button class="secondary" onclick="resolveCall(${c.id})">처리완료</button>`;
+  div.innerHTML = `
+    <div class="call-content">
+      <div>[${c.created_at}] <strong>${escapeHtml(c.player)}</strong> · ${escapeHtml(c.type)}${c.court ? " · " + escapeHtml(c.court) + "코트" : ""}</div>
+      ${c.message ? '<div class="call-message-preview">"' + escapeHtml(c.message) + '"</div>' : ''}
+    </div>
+    <div class="call-actions">
+      <button class="secondary" onclick="openCallChat(${c.id})">💬 답장</button>
+      <button class="secondary" onclick="resolveCall(${c.id})">✓ 처리완료</button>
+    </div>`;
   feed.prepend(div);
+});
+
+// 콜 채팅 (관리자 답장)
+let currentCallId = null;
+function openCallChat(cid) {
+  currentCallId = cid;
+  socket.emit("join_call", {call_id: cid});
+  fetch(`/api/calls/${cid}`).then(r => r.json()).then(d => {
+    document.getElementById("call-chat-title").innerText = `${d.type} · ${d.player}${d.court ? ' · ' + d.court + '코트' : ''}`;
+    const meta = [`상태: ${d.status}`, `시각: ${d.created_at}`];
+    if (d.message) meta.push(`최초 메시지: "${d.message}"`);
+    document.getElementById("call-chat-meta").innerText = meta.join(" · ");
+    const msgs = d.message ? [{sender: d.player, is_admin_reply: false, message: d.message, created_at: d.created_at}].concat(d.replies) : d.replies;
+    renderCallMessages(msgs);
+    document.getElementById("call-chat-modal").style.display = "flex";
+    setTimeout(() => document.getElementById("call-chat-input").focus(), 100);
+  });
+}
+function closeCallChat() {
+  document.getElementById("call-chat-modal").style.display = "none";
+  currentCallId = null;
+}
+function renderCallMessages(msgs) {
+  const box = document.getElementById("call-chat-messages");
+  box.innerHTML = (msgs || []).map(m => `
+    <div class="call-msg ${m.is_admin_reply ? 'admin' : 'player'}">
+      <div class="call-msg-header">${escapeHtml(m.sender)} · <span style="opacity:.7;">${m.created_at}</span>${m.is_admin_reply ? ' <span style="color:var(--primary);font-size:11px;">[관리자]</span>' : ''}</div>
+      <div class="call-msg-body">${escapeHtml(m.message)}</div>
+    </div>`).join("") || '<p style="color:var(--ink-faint);text-align:center;">아직 답장이 없습니다.</p>';
+  box.scrollTop = box.scrollHeight;
+}
+function sendCallReply() {
+  if (!currentCallId) return;
+  const inp = document.getElementById("call-chat-input");
+  const msg = inp.value.trim();
+  if (!msg) return;
+  apiPost(`/api/calls/${currentCallId}/reply`, {message: msg})
+    .then(() => { inp.value = ""; })
+    .catch(err => toast(err.message, "error"));
+}
+socket.on("call_reply", (d) => {
+  if (currentCallId === d.call_id) {
+    const box = document.getElementById("call-chat-messages");
+    if (box.querySelector("p")) box.innerHTML = "";
+    box.insertAdjacentHTML("beforeend", `
+      <div class="call-msg ${d.is_admin_reply ? 'admin' : 'player'}">
+        <div class="call-msg-header">${escapeHtml(d.sender)} · <span style="opacity:.7;">${d.created_at}</span>${d.is_admin_reply ? ' <span style="color:var(--primary);font-size:11px;">[관리자]</span>' : ''}</div>
+        <div class="call-msg-body">${escapeHtml(d.message)}</div>
+      </div>`);
+    box.scrollTop = box.scrollHeight;
+  }
 });
 
 function loadDraw() {

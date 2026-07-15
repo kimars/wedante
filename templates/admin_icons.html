@@ -30,6 +30,28 @@
     <input name="link_url" value="{{ edit_icon.link_url if edit_icon else '' }}" placeholder="https://... 또는 /register 같은 내부 경로">
   </div>
 
+  <div class="field">
+    <label>아이콘 크기 (px)</label>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <input type="range" id="icon-size-slider" min="32" max="128" step="4"
+             value="{{ edit_icon.icon_size if edit_icon and edit_icon.icon_size else 64 }}"
+             oninput="document.getElementById('icon-size-input').value = this.value; document.getElementById('icon-size-preview').style.width = this.value + 'px'; document.getElementById('icon-size-preview').style.height = this.value + 'px';"
+             style="flex:1;">
+      <input type="number" name="icon_size" id="icon-size-input" min="32" max="128" step="4"
+             value="{{ edit_icon.icon_size if edit_icon and edit_icon.icon_size else 64 }}"
+             oninput="document.getElementById('icon-size-slider').value = this.value; document.getElementById('icon-size-preview').style.width = this.value + 'px'; document.getElementById('icon-size-preview').style.height = this.value + 'px';"
+             style="width:80px;">
+      <span style="font-size:13px;color:var(--ink-faint);">px</span>
+    </div>
+    <div style="margin-top:12px;padding:12px;background:var(--surface);border-radius:8px;display:flex;align-items:center;gap:12px;">
+      <span style="font-size:13px;color:var(--ink-soft);">미리보기:</span>
+      <span class="icon-tile-img" id="icon-size-preview"
+            style="width:{{ edit_icon.icon_size if edit_icon and edit_icon.icon_size else 64 }}px;height:{{ edit_icon.icon_size if edit_icon and edit_icon.icon_size else 64 }}px;">
+        <span class="icon-tile-fallback">{{ edit_icon.label[0] if edit_icon else '아' }}</span>
+      </span>
+    </div>
+  </div>
+
   <div class="field"><label>정렬 순서 (작을수록 먼저, 최대 9개까지 홈에 표시)</label><input type="number" name="sort_order" value="{{ edit_icon.sort_order if edit_icon else 0 }}"></div>
   <div class="field">
     <label style="display:flex;align-items:center;gap:8px;font-weight:500;">

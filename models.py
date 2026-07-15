@@ -95,11 +95,14 @@ class Tournament(db.Model):
     deposit_account = db.Column(db.String(40))       # 참가비 입금계좌 번호
     deposit_holder = db.Column(db.String(40))        # 예금주
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)  # 이 대회를 만든 관리자
+    winner_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)      # 결승 종료 시 자동 기록
+    winner_pair = db.Column(db.String(120))          # 복식이면 이름 두 개(수동 입력용)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     matches = db.relationship("Match", backref="tournament", lazy=True,
                                cascade="all, delete-orphan")
     creator = db.relationship("User", foreign_keys=[created_by_id])
+    winner = db.relationship("User", foreign_keys=[winner_id])
 
 
 class TournamentParticipant(db.Model):
@@ -190,10 +193,27 @@ class CallLog(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
     call_type = db.Column(db.String(10), nullable=False)   # line/score/ball/etc
     court = db.Column(db.String(30))
+    message = db.Column(db.Text)                            # 콜과 함께 보낸 자세한 메시지(선택)
     status = db.Column(db.String(20), default="대기")       # 대기 / 확인함 / 처리완료
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     user = db.relationship("User")
+    replies = db.relationship("CallReply", backref="call", lazy=True,
+                              cascade="all, delete-orphan",
+                              order_by="CallReply.created_at")
+
+
+class CallReply(db.Model):
+    """관리자 ↔ 선수 실시간 채팅. call_log 하나에 여러 개 붙을 수 있음."""
+    __tablename__ = "call_replies"
+    id = db.Column(db.Integer, primary_key=True)
+    call_id = db.Column(db.Integer, db.ForeignKey("call_logs.id"), nullable=False)
+    sender_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    is_admin_reply = db.Column(db.Boolean, default=False)
+    message = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    sender = db.relationship("User")
 
 
 class SmsLog(db.Model):
@@ -244,6 +264,7 @@ class QuickIcon(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     label = db.Column(db.String(40), nullable=False)
     icon_url = db.Column(db.Text)              # 업로드했거나 외부에서 가져온 아이콘 이미지 주소
+    icon_size = db.Column(db.Integer, default=64)  # 아이콘 표시 크기(px)
     link_type = db.Column(db.String(20), default="external")   # external | calendar
     link_url = db.Column(db.Text)              # link_type == external 일 때 이동할 주소
     sort_order = db.Column(db.Integer, default=0)

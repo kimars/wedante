@@ -42,7 +42,7 @@
   {% for ic in icons %}
   <a class="icon-tile" href="{{ url_for('tournament_calendar') if ic.link_type == 'calendar' else (ic.link_url or '#') }}"
      {% if ic.link_type == 'external' %}target="_blank" rel="noopener"{% endif %}
-     style="animation-delay:{{ loop.index0 * 0.04 }}s">
+     style="animation-delay:{{ loop.index0 * 0.04 }}s;--icon-size:{{ ic.icon_size or 64 }}px;">
     <span class="icon-tile-img">
       {% if ic.icon_url %}<img src="{{ ic.icon_url }}" alt="{{ ic.label }}">
       {% else %}<span class="icon-tile-fallback">{{ ic.label[0] }}</span>{% endif %}
@@ -96,23 +96,57 @@
   const track = document.querySelector(".banner-track");
   if (slides.length <= 1) return;
   let idx = 0, timer;
+  let transitioning = false;
 
-  function go(i) {
-    slides[idx].classList.remove("active");
+  function go(target, direction) {
+    // direction: 1 = 다음(오른쪽에서 들어옴), -1 = 이전(왼쪽에서 들어옴)
+    target = (target + slides.length) % slides.length;
+    if (target === idx || transitioning) return;
+    transitioning = true;
+
+    const current = slides[idx];
+    const incoming = slides[target];
+
+    // 들어올 슬라이드를 반대편 밖에 세팅 (transition 없이)
+    incoming.classList.remove("active", "leaving-left", "leaving-right");
+    incoming.classList.add(direction > 0 ? "entering-from-right" : "entering-from-left");
+    // 강제 리플로우로 transition 초기화 반영
+    void incoming.offsetWidth;
+    // transition 다시 켜고 active 로
+    incoming.classList.remove("entering-from-right", "entering-from-left");
+    incoming.classList.add("active");
+    // 현재 슬라이드는 반대편으로 나감
+    current.classList.remove("active");
+    current.classList.add(direction > 0 ? "leaving-left" : "leaving-right");
+
+    // 점 상태
     dots[idx] && dots[idx].classList.remove("active");
-    idx = (i + slides.length) % slides.length;
-    slides[idx].classList.add("active");
-    dots[idx] && dots[idx].classList.add("active");
+    dots[target] && dots[target].classList.add("active");
+
+    const finish = () => {
+      current.classList.remove("leaving-left", "leaving-right");
+      transitioning = false;
+      idx = target;
+    };
+    // 애니메이션 끝나면 정리 (fallback 타이머)
+    current.addEventListener("transitionend", finish, {once: true});
+    setTimeout(finish, 700);
   }
-  function next() { go(idx + 1); restart(); }
-  function prev() { go(idx - 1); restart(); }
+
+  function next() { go(idx + 1, 1); restart(); }
+  function prev() { go(idx - 1, -1); restart(); }
   function restart() {
     clearInterval(timer);
     const duration = parseInt(slides[idx].dataset.duration || "5000", 10);
-    timer = setInterval(() => go(idx + 1), duration);
+    timer = setInterval(() => next(), duration);
   }
 
-  dots.forEach(d => d.addEventListener("click", (e) => { e.preventDefault(); go(parseInt(d.dataset.index)); restart(); }));
+  dots.forEach(d => d.addEventListener("click", (e) => {
+    e.preventDefault();
+    const target = parseInt(d.dataset.index);
+    go(target, target > idx ? 1 : -1);
+    restart();
+  }));
   if (nextBtn) nextBtn.addEventListener("click", (e) => { e.preventDefault(); next(); });
   if (prevBtn) prevBtn.addEventListener("click", (e) => { e.preventDefault(); prev(); });
 

@@ -14,7 +14,7 @@ from sqlalchemy import inspect as sqla_inspect, text
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 
-from models import db, Organizer, User, Tournament, TournamentParticipant, RefundRequest, RefundMessage, Match, CallLog, SmsLog, Banner, QuickIcon, PhoneVerification, CALL_TYPES
+from models import db, Organizer, User, Tournament, TournamentParticipant, RefundRequest, RefundMessage, Match, CallLog, CallReply, SmsLog, Banner, QuickIcon, PhoneVerification, CALL_TYPES
 from sms import send_sms
 
 load_dotenv()
@@ -50,6 +50,10 @@ def _apply_lightweight_migrations():
         ("users", "can_create_tournament", "BOOLEAN DEFAULT FALSE"),
         ("users", "phone_verified", "BOOLEAN DEFAULT FALSE"),
         ("tournaments", "created_by_id", "INTEGER"),
+        ("tournaments", "winner_id", "INTEGER"),
+        ("tournaments", "winner_pair", "VARCHAR(120)"),
+        ("call_logs", "message", "TEXT"),
+        ("quick_icons", "icon_size", "INTEGER DEFAULT 64"),
     ]
     try:
         insp = sqla_inspect(db.engine)
@@ -552,6 +556,7 @@ def new_icon():
         f = request.form
         icon = QuickIcon(
             label=f["label"], icon_url=f.get("icon_url") or None,
+            icon_size=max(24, min(160, int(f.get("icon_size") or 64))),
             link_type=f.get("link_type") or "external",
             link_url=f.get("link_url") or None,
             sort_order=int(f.get("sort_order") or 0),
@@ -575,6 +580,7 @@ def edit_icon(iid):
         f = request.form
         icon.label = f["label"]
         icon.icon_url = f.get("icon_url") or None
+        icon.icon_size = max(24, min(160, int(f.get("icon_size") or 64)))
         icon.link_type = f.get("link_type") or "external"
         icon.link_url = f.get("link_url") or None
         icon.sort_order = int(f.get("sort_order") or 0)
@@ -644,6 +650,9 @@ def api_update_status(tid):
         return jsonify({"error": "잘못된 상태값입니다"}), 400
     t.status = status
     db.session.commit()
+    # 실시간 반영: 대회 페이지에 접속한 모두 + 관리자 대시보드
+    socketio.emit("tournament_status", {"tournament_id": tid, "status": status},
+                   room=f"tournament_{tid}")
     return jsonify({"ok": True, "status": t.status})
 
 
@@ -826,6 +835,17 @@ def api_submit_score(mid):
 
     if m.stage == "main":
         advance_winner(m)
+        # 결승(next_match_id가 없는 최종 매치)이 종료되면 대회 우승자 확정
+        if m.next_match_id is None and m.winner_id:
+            t = m.tournament
+            t.winner_id = m.winner_id
+            t.status = "종료"
+            db.session.commit()
+            socketio.emit("tournament_finished", {
+                "tournament_id": t.id,
+                "winner_id": t.winner_id,
+                "winner_name": t.winner.name if t.winner else None,
+            }, room=f"tournament_{t.id}")
 
     socketio.emit("bracket_update", {"tournament_id": m.tournament_id},
                    room=f"tournament_{m.tournament_id}")
@@ -923,6 +943,8 @@ def api_apply_tournament(tid):
     t = Tournament.query.get_or_404(tid)
     if current_user.is_admin:
         return jsonify({"error": "관리자 계정은 대회에 참가 신청할 수 없습니다."}), 400
+    if t.status != "접수중":
+        return jsonify({"error": f"이 대회는 '{t.status}' 상태여서 지금은 신청할 수 없습니다."}), 400
     existing = TournamentParticipant.query.filter_by(tournament_id=tid, user_id=current_user.id).first()
     if existing:
         return jsonify({"error": "이미 신청하셨습니다."}), 400
@@ -931,6 +953,13 @@ def api_apply_tournament(tid):
                                confirmed_at=datetime.utcnow() if status == "확정" else None)
     db.session.add(p)
     db.session.commit()
+    # [4] 관리자 대시보드에 실시간 반영
+    socketio.emit("participant_update", {
+        "tournament_id": tid, "participant_id": p.id, "user_name": current_user.name,
+        "user_phone": current_user.phone, "status": p.status,
+        "applied_at": p.applied_at.strftime("%m/%d %H:%M"),
+        "action": "new"
+    }, room=f"tournament_{tid}_admin")
     return jsonify({"ok": True, "status": p.status})
 
 
@@ -943,6 +972,10 @@ def api_mark_paid(pid):
         abort(403)
     p.status = "입금확인요청"
     db.session.commit()
+    socketio.emit("participant_update", {
+        "tournament_id": p.tournament_id, "participant_id": p.id,
+        "status": p.status, "action": "update"
+    }, room=f"tournament_{p.tournament_id}_admin")
     return jsonify({"ok": True, "status": p.status})
 
 
@@ -956,6 +989,10 @@ def api_confirm_participant(pid):
     p.status = "확정"
     p.confirmed_at = datetime.utcnow()
     db.session.commit()
+    socketio.emit("participant_update", {
+        "tournament_id": p.tournament_id, "participant_id": p.id,
+        "status": p.status, "action": "update"
+    }, room=f"tournament_{p.tournament_id}_admin")
     return jsonify({"ok": True, "status": p.status})
 
 
@@ -966,8 +1003,12 @@ def api_cancel_participant(pid):
     p = TournamentParticipant.query.get_or_404(pid)
     if p.user_id != current_user.id and not can_manage_tournament(current_user, p.tournament):
         abort(403)
+    tid = p.tournament_id; pid_val = p.id
     db.session.delete(p)
     db.session.commit()
+    socketio.emit("participant_update", {
+        "tournament_id": tid, "participant_id": pid_val, "action": "delete"
+    }, room=f"tournament_{tid}_admin")
     return jsonify({"ok": True})
 
 
@@ -1089,23 +1130,77 @@ def api_call(tid):
     data = request.json or {}
     call = CallLog(tournament_id=tid, match_id=data.get("match_id"),
                     user_id=current_user.id, call_type=data.get("call_type", "etc"),
-                    court=data.get("court"))
+                    court=data.get("court"),
+                    message=(data.get("message") or "").strip() or None)
     db.session.add(call)
     db.session.commit()
 
     payload = {
         "id": call.id, "player": current_user.name, "court": call.court,
         "type": CALL_TYPES.get(call.call_type, call.call_type),
+        "message": call.message or "",
         "tournament_id": tid,
         "tournament_title": t.title,
         "created_at": call.created_at.strftime("%H:%M:%S"),
     }
-    # 이 대회의 관리자 room 과 알림 전용 room 양쪽으로 emit
-    #  - tournament_{tid}_admin: 관리 대시보드 열어둔 사람
-    #  - tournament_{tid}_alerts: 대회 페이지에서 관리자 뱃지 뜬 사람
+    # 이 대회의 관리자들이 있는 room 양쪽으로 emit
     socketio.emit("new_call", payload, room=f"tournament_{tid}_admin")
     socketio.emit("call_alert", payload, room=f"tournament_{tid}_alerts")
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "call_id": call.id})
+
+
+@app.route("/api/calls/<int:cid>", methods=["GET"])
+@login_required
+def api_get_call(cid):
+    """콜 상세 + 대화 목록 조회 (콜 발송자 본인 또는 대회 관리자만)"""
+    call = CallLog.query.get_or_404(cid)
+    t = Tournament.query.get(call.tournament_id)
+    if call.user_id != current_user.id and not (t and can_manage_tournament(current_user, t)):
+        abort(403)
+    return jsonify({
+        "id": call.id, "status": call.status,
+        "player": call.user.name if call.user else None,
+        "player_id": call.user_id,
+        "court": call.court, "message": call.message,
+        "type": CALL_TYPES.get(call.call_type, call.call_type),
+        "created_at": call.created_at.strftime("%m/%d %H:%M"),
+        "replies": [{
+            "id": r.id, "sender": r.sender.name if r.sender else "?",
+            "is_admin_reply": r.is_admin_reply, "message": r.message,
+            "created_at": r.created_at.strftime("%H:%M:%S"),
+        } for r in call.replies],
+    })
+
+
+@app.route("/api/calls/<int:cid>/reply", methods=["POST"])
+@login_required
+def api_call_reply(cid):
+    """콜에 메시지로 답장 (관리자↔선수 양방향). 선수는 본인 콜에만, 관리자는 자기 대회 콜에만."""
+    call = CallLog.query.get_or_404(cid)
+    t = Tournament.query.get(call.tournament_id)
+    is_manager = bool(t and can_manage_tournament(current_user, t))
+    is_owner = call.user_id == current_user.id
+    if not (is_manager or is_owner):
+        abort(403)
+    msg = (request.json.get("message") or "").strip()
+    if not msg:
+        return jsonify({"error": "메시지를 입력해주세요."}), 400
+    reply = CallReply(call_id=cid, sender_id=current_user.id,
+                       is_admin_reply=is_manager, message=msg)
+    db.session.add(reply)
+    # 관리자가 답장하면 콜 상태를 '확인함'으로
+    if is_manager and call.status == "대기":
+        call.status = "확인함"
+    db.session.commit()
+    payload = {
+        "call_id": cid, "reply_id": reply.id,
+        "sender": current_user.name, "is_admin_reply": is_manager,
+        "message": msg, "created_at": reply.created_at.strftime("%H:%M:%S"),
+    }
+    # 관리자용 room + 콜 당사자용 room 모두에 emit (선수는 자기 콜 방에 join 되어 있음)
+    socketio.emit("call_reply", payload, room=f"tournament_{call.tournament_id}_admin")
+    socketio.emit("call_reply", payload, room=f"call_{cid}")
+    return jsonify({"ok": True, "reply_id": reply.id})
 
 
 @app.route("/api/calls/<int:cid>/resolve", methods=["POST"])
@@ -1235,6 +1330,20 @@ def on_join_refund(data):
     rid = data.get("refund_id")
     if rid:
         join_room(f"refund_{rid}")
+
+
+@socketio.on("join_call")
+def on_join_call(data):
+    """콜 채팅방 join. 발송자 본인 또는 대회 관리자만."""
+    cid = data.get("call_id")
+    if not cid or not current_user.is_authenticated:
+        return
+    call = CallLog.query.get(cid)
+    if not call:
+        return
+    t = Tournament.query.get(call.tournament_id)
+    if call.user_id == current_user.id or (t and can_manage_tournament(current_user, t)):
+        join_room(f"call_{cid}")
 
 
 @app.cli.command("init-db")
