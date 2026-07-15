@@ -76,7 +76,41 @@
   <p id="sms-result" style="font-size:13px;margin-top:8px;"></p>
 </div>
 
-<h2>7. 실시간 콜 현황</h2>
+<h2>7. 환불 요청</h2>
+<div class="card">
+  <p style="font-size:13px;color:var(--ink-soft);">선수가 "환불/취소 문의하기"를 누르면 여기 표시됩니다. 채팅으로 상황을 파악한 뒤 아래에서 처리 상태를 바꿔주세요.</p>
+  {% for r in refund_requests %}
+  <div class="card-row" style="border-bottom:1px solid var(--border);padding:10px 0;">
+    <span>{{ r.user.name }} ({{ r.user.phone }}) · {{ r.created_at.strftime('%m/%d %H:%M') }}</span>
+    <span style="display:flex;align-items:center;gap:8px;">
+      <span class="badge {% if r.status == '완료' %}live{% elif r.status == '거절' %}closed{% endif %}">{{ r.status }}</span>
+      <button class="secondary" onclick="openAdminRefundChat({{ r.id }})">채팅 열기</button>
+    </span>
+  </div>
+  {% else %}
+  <p style="color:var(--ink-faint);margin:0;">환불 요청이 없습니다.</p>
+  {% endfor %}
+
+  <div class="refund-chat-box" id="admin-refund-box" style="display:none;margin-top:16px;">
+    <div class="card-row" style="margin-bottom:10px;">
+      <strong style="font-size:13px;">환불 문의 채팅</strong>
+      <span style="display:flex;align-items:center;gap:8px;">
+        <span class="badge refund-status-label">요청중</span>
+        <select id="refund-status-select" style="font-size:12px;padding:6px;">
+          {% for s in ['요청중','처리중','완료','거절'] %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+        </select>
+        <button class="secondary" style="padding:7px 12px;font-size:12px;" onclick="updateRefundStatus()">상태 저장</button>
+      </span>
+    </div>
+    <div class="refund-messages"></div>
+    <div class="refund-input-row">
+      <input class="refund-input" placeholder="답변을 입력하세요" onkeydown="if(event.key==='Enter'){sendRefundMessage('admin-refund-box');}">
+      <button onclick="sendRefundMessage('admin-refund-box')">전송</button>
+    </div>
+  </div>
+</div>
+
+<h2>8. 실시간 콜 현황</h2>
 <div id="call-feed">
   {% for c in calls %}
   <div class="call-feed-item {% if c.status == '처리완료' %}resolved{% endif %}" id="call-{{ c.id }}">
@@ -113,6 +147,22 @@ function confirmParticipant(pid) {
   fetch(`/api/participants/${pid}/confirm`, { method: "POST" })
     .then(r => r.json()).then(() => { toast("참가가 확정되었습니다.", "success"); setTimeout(() => location.reload(), 600); })
     .catch(() => toast("처리에 실패했습니다.", "error"));
+}
+
+function openAdminRefundChat(refundId) {
+  openRefundChat(refundId, "admin-refund-box");
+  document.getElementById("admin-refund-box").scrollIntoView({behavior: "smooth", block: "center"});
+}
+
+function updateRefundStatus() {
+  const box = document.getElementById("admin-refund-box");
+  const refundId = box.dataset.refundId;
+  const status = document.getElementById("refund-status-select").value;
+  fetch(`/api/refunds/${refundId}/status`, {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({status})
+  }).then(r => r.json()).then(() => { toast("상태가 저장되었습니다.", "success"); setTimeout(() => location.reload(), 600); })
+    .catch(() => toast("저장에 실패했습니다.", "error"));
 }
 
 function generateDraw() {

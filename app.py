@@ -12,7 +12,7 @@ from flask_socketio import SocketIO, emit, join_room
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 
-from models import db, Organizer, User, Tournament, TournamentParticipant, Match, CallLog, SmsLog, Banner, QuickIcon, CALL_TYPES
+from models import db, Organizer, User, Tournament, TournamentParticipant, RefundRequest, RefundMessage, Match, CallLog, SmsLog, Banner, QuickIcon, CALL_TYPES
 from sms import send_sms
 
 load_dotenv()
@@ -506,16 +506,26 @@ def admin_dashboard(tid):
     t = Tournament.query.get_or_404(tid)
     if not current_user.is_admin:
         abort(403)
-    players = User.query.filter_by(organizer_id=t.organizer_id).all()
     participants = TournamentParticipant.query.filter_by(tournament_id=tid).order_by(
         TournamentParticipant.applied_at).all()
     confirmed_ids = {p.user_id for p in participants if p.status == "확정"}
+    # 조 편성 대상: 주최자 소속 회원 + 이 대회에 실제로 신청한 회원(소속 무관, 공개가입자 포함)
+    org_players = User.query.filter_by(organizer_id=t.organizer_id).all()
+    applicant_ids = {p.user_id for p in participants}
+    applicant_users = User.query.filter(User.id.in_(applicant_ids)).all() if applicant_ids else []
+    players_map = {u.id: u for u in org_players}
+    for u in applicant_users:
+        players_map[u.id] = u
+    players = sorted(players_map.values(), key=lambda u: u.name)
+    refund_requests = RefundRequest.query.filter_by(tournament_id=tid).order_by(
+        RefundRequest.created_at.desc()).all()
     calls = CallLog.query.filter_by(tournament_id=tid).order_by(CallLog.created_at.desc()).all()
     prelim = Match.query.filter_by(tournament_id=tid, stage="prelim").all()
     groups = sorted(set(m.group_no for m in prelim)) if prelim else []
     return render_template("admin_dashboard.html", t=t, players=players, calls=calls,
                             groups=groups, call_types=CALL_TYPES,
-                            participants=participants, confirmed_ids=confirmed_ids)
+                            participants=participants, confirmed_ids=confirmed_ids,
+                            refund_requests=refund_requests)
 
 
 # ---------------------------------------------------------------------------
@@ -686,6 +696,82 @@ def api_cancel_participant(pid):
     return jsonify({"ok": True})
 
 
+def _can_access_refund(rr):
+    return current_user.is_authenticated and (rr.user_id == current_user.id or current_user.is_admin)
+
+
+@app.route("/api/tournaments/<int:tid>/refund-request", methods=["POST"])
+@login_required
+def api_create_refund_request(tid):
+    """선수가 '환불 요청' 버튼을 누르면 채팅방(RefundRequest)이 생성됨 (없으면 새로 만들고, 있으면 기존 것을 반환)"""
+    participation = TournamentParticipant.query.filter_by(tournament_id=tid, user_id=current_user.id).first()
+    if not participation:
+        return jsonify({"error": "이 대회에 신청한 내역이 없습니다."}), 400
+    rr = RefundRequest.query.filter_by(participant_id=participation.id).first()
+    if not rr:
+        rr = RefundRequest(tournament_id=tid, participant_id=participation.id, user_id=current_user.id)
+        db.session.add(rr)
+        db.session.commit()
+    msg_text = (request.json.get("message") if request.is_json else None) or None
+    if msg_text:
+        m = RefundMessage(refund_request_id=rr.id, sender_id=current_user.id, message=msg_text)
+        db.session.add(m)
+        db.session.commit()
+        socketio.emit("refund_message", {
+            "sender": current_user.name, "is_admin": current_user.is_admin,
+            "message": msg_text, "created_at": m.created_at.strftime("%m/%d %H:%M"),
+        }, room=f"refund_{rr.id}")
+    return jsonify({"ok": True, "id": rr.id, "status": rr.status})
+
+
+@app.route("/api/refunds/<int:rid>/messages", methods=["GET"])
+@login_required
+def api_get_refund_messages(rid):
+    rr = RefundRequest.query.get_or_404(rid)
+    if not _can_access_refund(rr):
+        abort(403)
+    msgs = RefundMessage.query.filter_by(refund_request_id=rid).order_by(RefundMessage.created_at).all()
+    return jsonify({
+        "status": rr.status,
+        "player_name": rr.user.name,
+        "messages": [{"sender": m.sender.name, "is_admin": m.sender.is_admin, "message": m.message,
+                       "created_at": m.created_at.strftime("%m/%d %H:%M")} for m in msgs],
+    })
+
+
+@app.route("/api/refunds/<int:rid>/messages", methods=["POST"])
+@login_required
+def api_post_refund_message(rid):
+    rr = RefundRequest.query.get_or_404(rid)
+    if not _can_access_refund(rr):
+        abort(403)
+    text = (request.json.get("message") or "").strip()
+    if not text:
+        return jsonify({"error": "메시지를 입력하세요"}), 400
+    m = RefundMessage(refund_request_id=rid, sender_id=current_user.id, message=text)
+    db.session.add(m)
+    db.session.commit()
+    payload = {"sender": current_user.name, "is_admin": current_user.is_admin,
+               "message": text, "created_at": m.created_at.strftime("%m/%d %H:%M")}
+    socketio.emit("refund_message", payload, room=f"refund_{rid}")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/refunds/<int:rid>/status", methods=["POST"])
+@login_required
+def api_update_refund_status(rid):
+    rr = RefundRequest.query.get_or_404(rid)
+    if not current_user.is_admin:
+        abort(403)
+    status = request.json.get("status")
+    if status not in ("요청중", "처리중", "완료", "거절"):
+        return jsonify({"error": "잘못된 상태값입니다"}), 400
+    rr.status = status
+    db.session.commit()
+    socketio.emit("refund_status", {"status": status}, room=f"refund_{rid}")
+    return jsonify({"ok": True, "status": status})
+
+
 # ---------------------------------------------------------------------------
 # API - 콜 기능 (선수 -> 주최자)
 # ---------------------------------------------------------------------------
@@ -771,6 +857,13 @@ def on_join(data):
     join_room(f"tournament_{tid}")
     if data.get("as_admin"):
         join_room(f"tournament_{tid}_admin")
+
+
+@socketio.on("join_refund")
+def on_join_refund(data):
+    rid = data.get("refund_id")
+    if rid:
+        join_room(f"refund_{rid}")
 
 
 @app.cli.command("init-db")

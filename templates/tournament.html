@@ -44,6 +44,23 @@
     <button class="clay" onclick="cancelApply({{ my_participation.id }})">신청 취소</button>
   </div>
   {% endif %}
+
+  {% if current_user.is_authenticated and my_participation %}
+  <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">
+    <button class="secondary" onclick="startRefundChat()">💬 환불/취소 문의하기</button>
+  </div>
+  <div class="refund-chat-box" id="refund-box" style="display:none;">
+    <div class="card-row" style="margin-bottom:10px;">
+      <strong style="font-size:13px;">주최자와의 환불 문의</strong>
+      <span class="badge refund-status-label">요청중</span>
+    </div>
+    <div class="refund-messages"></div>
+    <div class="refund-input-row">
+      <input class="refund-input" placeholder="메시지를 입력하세요 (예: 개인 사정으로 불참하게 되었습니다)" onkeydown="if(event.key==='Enter'){sendRefundMessage('refund-box');}">
+      <button onclick="sendRefundMessage('refund-box')">전송</button>
+    </div>
+  </div>
+  {% endif %}
 </div>
 
 <div class="card">
@@ -134,6 +151,15 @@ function cancelApply(pid) {
       toast("신청이 취소되었습니다.", "success");
       setTimeout(() => location.reload(), 700);
     }).catch(() => toast("취소에 실패했습니다.", "error"));
+}
+
+function startRefundChat() {
+  fetch(`/api/tournaments/${TID}/refund-request`, {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"
+  }).then(r => r.json()).then(d => {
+    if (d.error) { toast(d.error, "error"); return; }
+    openRefundChat(d.id, "refund-box");
+  }).catch(() => toast("문의방을 여는 데 실패했습니다.", "error"));
 }
 
 function searchPlayer() {

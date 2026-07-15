@@ -116,6 +116,33 @@ class TournamentParticipant(db.Model):
     __table_args__ = (db.UniqueConstraint("tournament_id", "user_id", name="uq_tournament_user"),)
 
 
+class RefundRequest(db.Model):
+    """선수가 참가 취소/환불을 요청하면 생성. 주최자와 채팅으로 대화하며 처리한다."""
+    __tablename__ = "refund_requests"
+    id = db.Column(db.Integer, primary_key=True)
+    tournament_id = db.Column(db.Integer, db.ForeignKey("tournaments.id"), nullable=False)
+    participant_id = db.Column(db.Integer, db.ForeignKey("tournament_participants.id"), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    status = db.Column(db.String(20), default="요청중")   # 요청중 / 처리중 / 완료 / 거절
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    tournament = db.relationship("Tournament")
+    participant = db.relationship("TournamentParticipant")
+    user = db.relationship("User")
+
+
+class RefundMessage(db.Model):
+    """환불 요청 채팅방의 메시지 한 개"""
+    __tablename__ = "refund_messages"
+    id = db.Column(db.Integer, primary_key=True)
+    refund_request_id = db.Column(db.Integer, db.ForeignKey("refund_requests.id"), nullable=False)
+    sender_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    sender = db.relationship("User")
+
+
 class Match(db.Model):
     """예선/본선 공용 경기 노드. stage='prelim' 이면 group_no 사용,
     stage='main' 이면 round_name/match_no 로 토너먼트 트리를 구성한다."""
