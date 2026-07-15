@@ -93,43 +93,70 @@ def build_main_bracket(tournament_id, slot_count):
     return rounds[0]  # 1라운드 = 조 우승자가 배정될 자리
 
 
+def _first_round_main_matches(tournament_id):
+    """본선 첫 라운드(가장 매치가 많은 라운드)의 매치들을 match_no 순으로 반환.
+    조 우승자를 넣을 슬롯을 찾기 위한 결정론적 계산에 사용."""
+    main = Match.query.filter_by(tournament_id=tournament_id, stage="main").all()
+    if not main:
+        return []
+    by_round = {}
+    for m in main:
+        by_round.setdefault(m.round_name, []).append(m)
+    # 가장 매치가 많은 라운드 = 1라운드
+    first = max(by_round.values(), key=len)
+    return sorted(first, key=lambda m: m.match_no)
+
+
+def _set_group_winner_slot(tournament_id, group_no, winner_id):
+    """조 우승자를 본선 첫 라운드 매치의 해당 슬롯에 배치. commit/emit은 호출자 책임."""
+    first_round = _first_round_main_matches(tournament_id)
+    if not first_round:
+        return
+    idx = (group_no - 1) // 2
+    slot = ((group_no - 1) % 2) + 1
+    if idx >= len(first_round):
+        return
+    slot_match = first_round[idx]
+    if slot == 1:
+        slot_match.player1_id = winner_id
+    else:
+        slot_match.player2_id = winner_id
+
+
 def generate_prelim_groups(tournament: Tournament, player_ids: list[int]):
     """참가자를 조로 나누고(조당 group_size 명), 각 조 내 라운드로빈 경기를 만든다.
-    동시에 각 조 우승자가 들어갈 본선 슬롯을 미리 배정해 둔다."""
+    조 우승자의 본선 슬롯은 group_no로부터 결정론적으로 계산되므로 별도 저장 불필요.
+    (과거에 seed_group_no/seed_slot을 저장하던 로직은 두 조가 같은 매치에 배정될 때
+     서로의 값을 덮어써서 1조 우승자가 본선에 반영되지 않는 버그가 있었음)
+    조원이 1명뿐이면 부전승으로 처리해 본선에 즉시 반영한다."""
     players = player_ids[:]
     random.shuffle(players)
     gsize = tournament.group_size or 3
     groups = [players[i:i + gsize] for i in range(0, len(players), gsize)]
 
-    # 본선 대진표를 조 개수만큼 미리 생성 (부전승 슬롯 포함)
-    first_round = build_main_bracket(tournament.id, len(groups))
+    # 본선 빈 대진표를 조 개수만큼 미리 생성 (부전승 슬롯 포함)
+    build_main_bracket(tournament.id, len(groups))
 
     for gi, group in enumerate(groups, start=1):
+        if len(group) == 1:
+            # 조원 1명 = 자동 부전승. 본선 슬롯에 즉시 배치
+            _set_group_winner_slot(tournament.id, gi, group[0])
+            continue
         # 조 내 라운드로빈 매치 생성
         for a in range(len(group)):
             for b in range(a + 1, len(group)):
                 m = Match(tournament_id=tournament.id, stage="prelim", group_no=gi,
                           player1_id=group[a], player2_id=group[b], status="시작전")
                 db.session.add(m)
-        # 이 조의 우승자가 들어갈 본선 1라운드 슬롯 기록
-        slot_match = first_round[(gi - 1) // 2]
-        slot_no = ((gi - 1) % 2) + 1
-        slot_match.seed_group_no = gi
-        slot_match.seed_slot = slot_no
     db.session.commit()
     return groups
 
 
 def record_group_winner(tournament: Tournament, group_no: int, winner_id: int):
-    """조별 예선이 끝나고 주최자가 우승자를 확정하면, 본선 대진표 해당 슬롯에 자동 반영"""
-    slot_match = Match.query.filter_by(tournament_id=tournament.id, stage="main",
-                                        seed_group_no=group_no).first()
-    if slot_match:
-        if slot_match.seed_slot == 1:
-            slot_match.player1_id = winner_id
-        else:
-            slot_match.player2_id = winner_id
-        db.session.commit()
+    """조별 예선이 끝나고 주최자가 우승자를 확정하면, 본선 대진표 해당 슬롯에 자동 반영.
+    group_no로부터 첫 라운드 매치 인덱스와 슬롯을 결정론적으로 계산한다."""
+    _set_group_winner_slot(tournament.id, group_no, winner_id)
+    db.session.commit()
     socketio.emit("bracket_update", {"tournament_id": tournament.id},
                    room=f"tournament_{tournament.id}")
 
@@ -541,9 +568,19 @@ def api_generate_draw(tid):
     if not current_user.is_admin:
         abort(403)
     player_ids = request.json.get("player_ids", [])
+    # 중복 제거 (같은 선수를 두 번 체크하는 실수 방지)
+    player_ids = list(dict.fromkeys(int(pid) for pid in player_ids))
     if len(player_ids) < 2:
         return jsonify({"error": "참가자가 2명 이상 필요합니다"}), 400
     try:
+        # 재생성 시 이전 매치를 완전 삭제 (조 우승자 반영 상태 등 초기화)
+        old_match_ids = [row[0] for row in db.session.query(Match.id).filter_by(tournament_id=t.id).all()]
+        if old_match_ids:
+            # CallLog가 삭제될 매치를 참조 중이면 FK 위반이 나므로 참조를 먼저 끊는다
+            CallLog.query.filter(CallLog.match_id.in_(old_match_ids)).update(
+                {"match_id": None}, synchronize_session=False)
+            Match.query.filter_by(tournament_id=t.id).delete(synchronize_session=False)
+            db.session.commit()
         generate_prelim_groups(t, player_ids)
     except Exception as e:
         db.session.rollback()

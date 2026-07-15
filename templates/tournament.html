@@ -174,11 +174,14 @@ function searchPlayer() {
 document.getElementById("search-input").addEventListener("keydown", (e) => { if (e.key === "Enter") searchPlayer(); });
 
 function loadDraw() {
-  fetch(`/api/tournaments/${TID}/draw`).then(r => r.json()).then(data => {
-    renderPrelim(data.prelim);
-    renderMain(data.main);
-    renderCourtsAndSchedule(data.prelim.concat(data.main));
-  });
+  fetch(`/api/tournaments/${TID}/draw`)
+    .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+    .then(data => {
+      renderPrelim(data.prelim);
+      renderMain(data.main);
+      renderCourtsAndSchedule(data.prelim.concat(data.main));
+    })
+    .catch(err => console.error("Draw load failed:", err));
 }
 
 function renderPrelim(matches) {

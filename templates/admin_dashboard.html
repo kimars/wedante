@@ -168,11 +168,24 @@ socket.on("new_call", (c) => {
 });
 
 function loadDraw() {
-  fetch(`/api/tournaments/${TID}/draw`).then(r => r.json()).then(data => {
-    renderGroupWinners(data.prelim);
-    renderPrelimAdmin(data.prelim);
-    renderMainAdmin(data.main);
-  });
+  fetch(`/api/tournaments/${TID}/draw`)
+    .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+    .then(data => {
+      renderGroupWinners(data.prelim);
+      renderPrelimAdmin(data.prelim);
+      renderMainAdmin(data.main);
+    })
+    .catch(err => {
+      console.error("Draw load failed:", err);
+      toast("대진표를 불러오지 못했습니다. 새로고침을 시도해주세요.", "error");
+    });
+}
+
+// 본선 라운드 이름을 진행 순서대로 정렬하기 위한 우선순위
+const ROUND_ORDER = ["128강","64강","32강","16강","8강","준결승","결승"];
+function roundIndex(name) {
+  const i = ROUND_ORDER.indexOf(name);
+  return i === -1 ? 99 : i;
 }
 
 function renderGroupWinners(prelimMatches) {
@@ -242,18 +255,33 @@ function fillGroupSelect(gno, matches) {
 
 function renderMainAdmin(matches) {
   const el = document.getElementById("main-admin-list");
-  el.innerHTML = matches.filter(m => m.player1_id && m.player2_id).map(m => `
-    <div class="card-row" style="border-bottom:1px solid var(--border);padding:8px 0;flex-wrap:wrap;">
-      <span>${m.round_name} · ${m.player1} vs ${m.player2}</span>
+  if (matches.length === 0) {
+    el.innerHTML = "<p>본선 대진표가 아직 생성되지 않았습니다.</p>";
+    return;
+  }
+  const sorted = matches.slice().sort((a, b) => {
+    const ri = roundIndex(a.round_name) - roundIndex(b.round_name);
+    return ri !== 0 ? ri : (a.match_no || 0) - (b.match_no || 0);
+  });
+  el.innerHTML = sorted.map(m => {
+    const p1 = m.player1 || "?";
+    const p2 = m.player2 || "?";
+    const bothSet = !!(m.player1_id && m.player2_id);
+    return `
+    <div class="card-row" style="border-bottom:1px solid var(--border);padding:8px 0;flex-wrap:wrap;${bothSet ? '' : 'opacity:.7;'}">
+      <span><strong style="color:var(--primary);">${m.round_name || ''}</strong>${m.match_no ? ' #' + m.match_no : ''} · ${p1} vs ${p2}${bothSet ? '' : ' <span style="color:var(--ink-faint);font-size:12px;">(조 우승자 확정 대기)</span>'}</span>
       <span style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
         <input placeholder="코트" id="mcourt-${m.id}" style="width:56px;padding:6px;border:1px solid var(--border-strong);border-radius:8px;" value="${m.court || ''}">
         <input placeholder="시간 09:00" id="mtime-${m.id}" style="width:78px;padding:6px;border:1px solid var(--border-strong);border-radius:8px;" value="${m.scheduled_time || ''}">
         <button class="secondary" style="padding:7px 10px;font-size:12px;" onclick="submitSchedule(${m.id}, 'm')">배정</button>
-        <input placeholder="6-3,6-4" id="score-${m.id}" style="width:100px;padding:6px;border:1px solid var(--border-strong);border-radius:8px;" value="${m.score || ''}">
-        <button class="secondary" onclick="submitScore(${m.id}, ${m.player1_id})">${m.player1} 승</button>
-        <button class="secondary" onclick="submitScore(${m.id}, ${m.player2_id})">${m.player2} 승</button>
+        ${bothSet ? `
+          <input placeholder="6-3,6-4" id="score-${m.id}" style="width:100px;padding:6px;border:1px solid var(--border-strong);border-radius:8px;" value="${m.score || ''}">
+          <button class="secondary" onclick="submitScore(${m.id}, ${m.player1_id})">${p1} 승</button>
+          <button class="secondary" onclick="submitScore(${m.id}, ${m.player2_id})">${p2} 승</button>
+        ` : ''}
       </span>
-    </div>`).join("") || "<p>대진이 아직 채워지지 않았습니다.</p>";
+    </div>`;
+  }).join("");
 }
 
 function submitScore(mid, winnerId) {
