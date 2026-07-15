@@ -30,3 +30,19 @@ function flashUpdate(el) {
   void el.offsetWidth; // reflow to restart animation
   el.classList.add("updated");
 }
+
+// 서버 에러(400 등)를 진짜 실패로 인식하는 공용 POST 헬퍼.
+// 기존 코드처럼 .then(r => r.json()).then(() => toast(success)) 로만 짜면
+// 서버가 {"error": "..."} 를 400으로 내려줘도 fetch 자체는 성공했기 때문에
+// 무조건 성공 토스트가 뜨는 버그가 생긴다. 이 헬퍼를 쓰면 그 문제가 없다.
+function apiPost(url, body) {
+  return fetch(url, {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body || {})
+  }).then(r => r.json().then(data => {
+    if (!r.ok || data.error) {
+      throw new Error(data.error || "요청에 실패했습니다.");
+    }
+    return data;
+  }));
+}

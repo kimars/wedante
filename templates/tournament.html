@@ -123,45 +123,38 @@ socket.on("connect", () => socket.emit("join_tournament", {tournament_id: TID}))
 socket.on("bracket_update", () => loadDraw());
 
 function sendCall(type) {
-  fetch(`/api/tournaments/${TID}/call`, {
-    method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({call_type: type})
-  }).then(r => r.json()).then(() => {
-    toast("주최자에게 전달되었습니다.", "success");
-  }).catch(() => toast("전송에 실패했습니다. 다시 시도해주세요.", "error"));
+  apiPost(`/api/tournaments/${TID}/call`, {call_type: type})
+    .then(() => { toast("주최자에게 전달되었습니다.", "success"); })
+    .catch((err) => toast(err.message, "error"));
 }
 
 function applyTournament() {
-  fetch(`/api/tournaments/${TID}/apply`, { method: "POST" })
-    .then(r => r.json()).then(d => {
-      if (d.error) { toast(d.error, "error"); return; }
+  apiPost(`/api/tournaments/${TID}/apply`)
+    .then(() => {
       toast("참가 신청이 완료되었습니다!", "success");
       setTimeout(() => location.reload(), 700);
-    }).catch(() => toast("신청에 실패했습니다.", "error"));
+    }).catch((err) => toast(err.message, "error"));
 }
 function markPaid(pid) {
-  fetch(`/api/participants/${pid}/mark-paid`, { method: "POST" })
-    .then(r => r.json()).then(() => {
+  apiPost(`/api/participants/${pid}/mark-paid`)
+    .then(() => {
       toast("입금 완료로 표시했습니다. 관리자 확인 후 참가가 확정됩니다.", "success");
       setTimeout(() => location.reload(), 700);
-    }).catch(() => toast("처리에 실패했습니다.", "error"));
+    }).catch((err) => toast(err.message, "error"));
 }
 function cancelApply(pid) {
   if (!confirm("참가 신청을 취소할까요?")) return;
-  fetch(`/api/participants/${pid}/cancel`, { method: "POST" })
-    .then(r => r.json()).then(() => {
+  apiPost(`/api/participants/${pid}/cancel`)
+    .then(() => {
       toast("신청이 취소되었습니다.", "success");
       setTimeout(() => location.reload(), 700);
-    }).catch(() => toast("취소에 실패했습니다.", "error"));
+    }).catch((err) => toast(err.message, "error"));
 }
 
 function startRefundChat() {
-  fetch(`/api/tournaments/${TID}/refund-request`, {
-    method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"
-  }).then(r => r.json()).then(d => {
-    if (d.error) { toast(d.error, "error"); return; }
-    openRefundChat(d.id, "refund-box");
-  }).catch(() => toast("문의방을 여는 데 실패했습니다.", "error"));
+  apiPost(`/api/tournaments/${TID}/refund-request`)
+    .then(d => openRefundChat(d.id, "refund-box"))
+    .catch((err) => toast(err.message, "error"));
 }
 
 function searchPlayer() {

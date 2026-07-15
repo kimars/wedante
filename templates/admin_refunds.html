@@ -46,23 +46,21 @@ function openAdminRefundChat(refundId) {
 }
 
 function completeRefund(refundId) {
-  fetch(`/api/refunds/${refundId}/status`, {
-    method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({status: "완료"})
-  }).then(r => r.json()).then(() => { toast("환불 완료로 처리했습니다.", "success"); setTimeout(() => location.reload(), 600); })
-    .catch(() => toast("처리에 실패했습니다.", "error"));
+  apiPost(`/api/refunds/${refundId}/status`, {status: "완료"})
+    .then(() => { toast("환불 완료로 처리했습니다.", "success"); setTimeout(() => location.reload(), 600); })
+    .catch((err) => toast(err.message, "error"));
 }
 
 function endRefundChat(refundId) {
   if (!confirm("이 채팅을 종료할까요? 대화 내용이 모두 삭제되며 되돌릴 수 없습니다.")) return;
-  fetch(`/api/refunds/${refundId}/end`, { method: "POST" })
-    .then(r => r.json()).then(() => {
+  apiPost(`/api/refunds/${refundId}/end`)
+    .then(() => {
       toast("채팅이 종료되었습니다.", "success");
       const row = document.getElementById(`refund-row-${refundId}`);
       if (row) row.remove();
       const box = document.getElementById("admin-refund-box");
       if (box.dataset.refundId == refundId) box.style.display = "none";
-    }).catch(() => toast("종료에 실패했습니다.", "error"));
+    }).catch((err) => toast(err.message, "error"));
 }
 </script>
 {% endblock %}
