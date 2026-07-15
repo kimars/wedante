@@ -53,15 +53,7 @@
 
 <h2>4. 조별 우승자 확정 → 본선 자동 반영</h2>
 <div class="card">
-  {% for g in groups %}
-  <div class="card-row" style="margin-bottom:8px;">
-    <span>{{ g }}조 우승자</span>
-    <select id="group-winner-{{ g }}"></select>
-    <button class="secondary" onclick="setGroupWinner({{ g }})">확정</button>
-  </div>
-  {% else %}
-  <p>생성된 조가 없습니다.</p>
-  {% endfor %}
+  <div id="group-winners-list"><p>생성된 조가 없습니다.</p></div>
 </div>
 
 <h2>5. 본선 스코어 입력</h2>
@@ -177,13 +169,26 @@ socket.on("new_call", (c) => {
 
 function loadDraw() {
   fetch(`/api/tournaments/${TID}/draw`).then(r => r.json()).then(data => {
-    // 조별 우승자 셀렉트 채우기
-    {% for g in groups %}
-    fillGroupSelect({{ g }}, data.prelim.filter(m => m.group_no === {{ g }}));
-    {% endfor %}
+    renderGroupWinners(data.prelim);
     renderPrelimAdmin(data.prelim);
     renderMainAdmin(data.main);
   });
+}
+
+function renderGroupWinners(prelimMatches) {
+  const el = document.getElementById("group-winners-list");
+  const groupNos = [...new Set(prelimMatches.map(m => m.group_no))].sort((a, b) => a - b);
+  if (groupNos.length === 0) {
+    el.innerHTML = "<p>생성된 조가 없습니다.</p>";
+    return;
+  }
+  el.innerHTML = groupNos.map(gno => `
+    <div class="card-row" style="margin-bottom:8px;">
+      <span>${gno}조 우승자</span>
+      <select id="group-winner-${gno}"></select>
+      <button class="secondary" onclick="setGroupWinner(${gno})">확정</button>
+    </div>`).join("");
+  groupNos.forEach(gno => fillGroupSelect(gno, prelimMatches.filter(m => m.group_no === gno)));
 }
 
 function renderPrelimAdmin(matches) {
