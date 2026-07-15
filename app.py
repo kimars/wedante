@@ -64,8 +64,10 @@ def next_power_of_two(n):
 
 def build_main_bracket(tournament_id, slot_count):
     """빈 본선 토너먼트 트리를 생성하고 각 라운드를 next_match_id로 연결한다.
-    반환값: 1라운드 매치 리스트 (조 우승자가 채워질 슬롯)"""
-    size = next_power_of_two(slot_count)
+    반환값: 1라운드 매치 리스트 (조 우승자가 채워질 슬롯)
+    조가 1개뿐이어도(=참가자가 적어 그룹이 하나만 만들어져도) 최소 2슬롯(결승 1경기)은
+    항상 만들어서 첫 조 슬롯 배정 시 인덱스 에러가 나지 않게 한다."""
+    size = next_power_of_two(max(slot_count, 2))
     round_names = ROUND_NAMES_BY_SIZE.get(size, [f"{size}강"] + ["결승"])
 
     rounds = []  # rounds[i] = list[Match] for round i
@@ -541,7 +543,12 @@ def api_generate_draw(tid):
     player_ids = request.json.get("player_ids", [])
     if len(player_ids) < 2:
         return jsonify({"error": "참가자가 2명 이상 필요합니다"}), 400
-    generate_prelim_groups(t, player_ids)
+    try:
+        generate_prelim_groups(t, player_ids)
+    except Exception as e:
+        db.session.rollback()
+        app.logger.exception("draw generation failed")
+        return jsonify({"error": f"대진표 생성 중 오류가 발생했습니다: {e}"}), 500
     socketio.emit("bracket_update", {"tournament_id": tid}, room=f"tournament_{tid}")
     return jsonify({"ok": True})
 
