@@ -31,22 +31,39 @@
   </div>
 
   <div class="field">
-    <label>아이콘 크기 (px)</label>
-    <div style="display:flex;align-items:center;gap:12px;">
-      <input type="range" id="icon-size-slider" min="32" max="128" step="4"
-             value="{{ edit_icon.icon_size if edit_icon and edit_icon.icon_size else 64 }}"
-             oninput="document.getElementById('icon-size-input').value = this.value; document.getElementById('icon-size-preview').style.width = this.value + 'px'; document.getElementById('icon-size-preview').style.height = this.value + 'px';"
-             style="flex:1;">
-      <input type="number" name="icon_size" id="icon-size-input" min="32" max="128" step="4"
-             value="{{ edit_icon.icon_size if edit_icon and edit_icon.icon_size else 64 }}"
-             oninput="document.getElementById('icon-size-slider').value = this.value; document.getElementById('icon-size-preview').style.width = this.value + 'px'; document.getElementById('icon-size-preview').style.height = this.value + 'px';"
-             style="width:80px;">
-      <span style="font-size:13px;color:var(--ink-faint);">px</span>
+    <label>아이콘 크기 (가로 / 세로 별도)</label>
+    <div class="card-row" style="gap:14px;">
+      <div style="flex:1;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+          <span style="font-size:12px;color:var(--ink-soft);width:38px;">가로</span>
+          <input type="range" id="icon-w-slider" min="32" max="200" step="4"
+                 value="{{ edit_icon.icon_width if edit_icon and edit_icon.icon_width else 64 }}"
+                 oninput="syncIconSize()"
+                 style="flex:1;">
+          <input type="number" name="icon_width" id="icon-w-input" min="24" max="240" step="4"
+                 value="{{ edit_icon.icon_width if edit_icon and edit_icon.icon_width else 64 }}"
+                 oninput="syncIconSize()"
+                 style="width:70px;">
+          <span style="font-size:12px;color:var(--ink-faint);">px</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span style="font-size:12px;color:var(--ink-soft);width:38px;">세로</span>
+          <input type="range" id="icon-h-slider" min="32" max="200" step="4"
+                 value="{{ edit_icon.icon_height if edit_icon and edit_icon.icon_height else 64 }}"
+                 oninput="syncIconSize()"
+                 style="flex:1;">
+          <input type="number" name="icon_height" id="icon-h-input" min="24" max="240" step="4"
+                 value="{{ edit_icon.icon_height if edit_icon and edit_icon.icon_height else 64 }}"
+                 oninput="syncIconSize()"
+                 style="width:70px;">
+          <span style="font-size:12px;color:var(--ink-faint);">px</span>
+        </div>
+      </div>
     </div>
-    <div style="margin-top:12px;padding:12px;background:var(--surface);border-radius:8px;display:flex;align-items:center;gap:12px;">
+    <div style="margin-top:12px;padding:14px;background:var(--surface);border-radius:8px;display:flex;align-items:center;gap:14px;">
       <span style="font-size:13px;color:var(--ink-soft);">미리보기:</span>
       <span class="icon-tile-img" id="icon-size-preview"
-            style="width:{{ edit_icon.icon_size if edit_icon and edit_icon.icon_size else 64 }}px;height:{{ edit_icon.icon_size if edit_icon and edit_icon.icon_size else 64 }}px;">
+            style="width:{{ edit_icon.icon_width if edit_icon and edit_icon.icon_width else 64 }}px;height:{{ edit_icon.icon_height if edit_icon and edit_icon.icon_height else 64 }}px;transition:width .15s,height .15s;">
         <span class="icon-tile-fallback">{{ edit_icon.label[0] if edit_icon else '아' }}</span>
       </span>
     </div>
@@ -90,6 +107,24 @@
 {% block scripts %}
 <script>
 wireUploader("icon-file", "icon_url", "icon-preview");
+
+function syncIconSize() {
+  // 슬라이더와 숫자 입력이 서로 동기화되도록
+  const w = document.getElementById("icon-w-slider");
+  const wi = document.getElementById("icon-w-input");
+  const h = document.getElementById("icon-h-slider");
+  const hi = document.getElementById("icon-h-input");
+  // 어느 쪽이 방금 바뀌었는지 이벤트 소스로 확인
+  const src = document.activeElement;
+  if (src === w) wi.value = w.value;
+  else if (src === wi) w.value = wi.value;
+  else if (src === h) hi.value = h.value;
+  else if (src === hi) h.value = hi.value;
+  // 미리보기 즉시 반영
+  const preview = document.getElementById("icon-size-preview");
+  preview.style.width = w.value + "px";
+  preview.style.height = h.value + "px";
+}
 
 function toggleIcon(id) {
   fetch(`/admin/icons/${id}/toggle`, {method: "POST"})

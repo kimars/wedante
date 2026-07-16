@@ -2,7 +2,7 @@ import os
 import math
 import random
 import uuid
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from calendar import Calendar
 
 from flask import Flask, render_template, request, redirect, url_for, jsonify, flash, abort, session
@@ -14,7 +14,7 @@ from sqlalchemy import inspect as sqla_inspect, text
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 
-from models import db, Organizer, User, Tournament, TournamentParticipant, RefundRequest, RefundMessage, Match, CallLog, CallReply, SmsLog, Banner, QuickIcon, PhoneVerification, CALL_TYPES
+from models import db, Organizer, User, Tournament, TournamentParticipant, RefundRequest, RefundMessage, Match, CallLog, CallReply, SmsLog, Banner, QuickIcon, PhoneVerification, ScheduledSms, CALL_TYPES
 from sms import send_sms
 
 load_dotenv()
@@ -52,8 +52,22 @@ def _apply_lightweight_migrations():
         ("tournaments", "created_by_id", "INTEGER"),
         ("tournaments", "winner_id", "INTEGER"),
         ("tournaments", "winner_pair", "VARCHAR(120)"),
+        ("tournaments", "format", "VARCHAR(10) DEFAULT 'singles'"),
+        ("tournaments", "start_time", "VARCHAR(10) DEFAULT '09:00'"),
+        ("tournaments", "match_interval_min", "INTEGER DEFAULT 30"),
+        ("tournament_participants", "partner_id", "INTEGER"),
         ("call_logs", "message", "TEXT"),
         ("quick_icons", "icon_size", "INTEGER DEFAULT 64"),
+        ("quick_icons", "icon_width", "INTEGER DEFAULT 64"),
+        ("quick_icons", "icon_height", "INTEGER DEFAULT 64"),
+        ("matches", "seq_in_group", "INTEGER"),
+        ("matches", "court_seq", "INTEGER"),
+        ("matches", "started_at", "TIMESTAMP"),
+        ("matches", "duration_min", "INTEGER DEFAULT 20"),
+        ("matches", "source_match_id", "INTEGER"),
+        ("matches", "source_role", "VARCHAR(10)"),
+        ("matches", "player1_partner_id", "INTEGER"),
+        ("matches", "player2_partner_id", "INTEGER"),
     ]
     try:
         insp = sqla_inspect(db.engine)
@@ -101,6 +115,33 @@ def can_manage_tournament(user, tournament):
 def can_delete_tournament(user, tournament):
     """대회 삭제는 최고 관리자 전용."""
     return bool(user and user.is_authenticated and user.is_superadmin)
+
+
+def mask_phone(phone: str) -> str:
+    """공개 페이지에서 개인정보 보호를 위해 중간 자리 마스킹.
+    01012345678 → 010-1***-**78"""
+    if not phone:
+        return ""
+    digits = "".join(ch for ch in phone if ch.isdigit())
+    if len(digits) == 11:
+        return f"{digits[0:3]}-{digits[3]}***-**{digits[9:11]}"
+    if len(digits) == 10:
+        return f"{digits[0:3]}-***-**{digits[8:10]}"
+    return "***-****-****"
+
+
+def mask_name(name: str) -> str:
+    """공개 목록의 이름을 부분 마스킹. 홍길동 → 홍*동, 김철 → 김*"""
+    if not name:
+        return ""
+    if len(name) <= 2:
+        return name[0] + "*"
+    return name[0] + "*" * (len(name) - 2) + name[-1]
+
+
+# Jinja 템플릿에서 바로 사용할 수 있도록 등록
+app.jinja_env.filters["mask_phone"] = mask_phone
+app.jinja_env.filters["mask_name"] = mask_name
 
 
 # ---------------------------------------------------------------------------
@@ -182,61 +223,295 @@ def _set_group_winner_slot(tournament_id, group_no, winner_id):
         slot_match.player2_id = winner_id
 
 
-def generate_prelim_groups(tournament: Tournament, player_ids: list[int]):
-    """참가자를 조로 나누고(조당 group_size 명), 각 조 내 라운드로빈 경기를 만든다.
-    조 우승자의 본선 슬롯은 group_no로부터 결정론적으로 계산되므로 별도 저장 불필요.
-    (과거에 seed_group_no/seed_slot을 저장하던 로직은 두 조가 같은 매치에 배정될 때
-     서로의 값을 덮어써서 1조 우승자가 본선에 반영되지 않는 버그가 있었음)
-    조원이 1명뿐이면 부전승으로 처리해 본선에 즉시 반영한다."""
-    players = player_ids[:]
-    random.shuffle(players)
-    gsize = tournament.group_size or 3
-    groups = [players[i:i + gsize] for i in range(0, len(players), gsize)]
-
-    # 본선 빈 대진표를 조 개수만큼 미리 생성 (부전승 슬롯 포함)
-    build_main_bracket(tournament.id, len(groups))
-
-    for gi, group in enumerate(groups, start=1):
-        if len(group) == 1:
-            # 조원 1명 = 자동 부전승. 본선 슬롯에 즉시 배치
-            _set_group_winner_slot(tournament.id, gi, group[0])
-            continue
-        # 조 내 라운드로빈 매치 생성
-        for a in range(len(group)):
-            for b in range(a + 1, len(group)):
-                m = Match(tournament_id=tournament.id, stage="prelim", group_no=gi,
-                          player1_id=group[a], player2_id=group[b], status="시작전")
-                db.session.add(m)
-    db.session.commit()
-    return groups
-
-
 def record_group_winner(tournament: Tournament, group_no: int, winner_id: int):
-    """조별 예선이 끝나고 주최자가 우승자를 확정하면, 본선 대진표 해당 슬롯에 자동 반영.
-    group_no로부터 첫 라운드 매치 인덱스와 슬롯을 결정론적으로 계산한다."""
+    """조별 예선이 끝나고 주최자가 우승자를 확정하면, 본선 대진표 해당 슬롯에 자동 반영."""
     _set_group_winner_slot(tournament.id, group_no, winner_id)
     db.session.commit()
     socketio.emit("bracket_update", {"tournament_id": tournament.id},
                    room=f"tournament_{tournament.id}")
 
 
+def _assign_courts_and_schedule(tournament: Tournament, groups_count: int):
+    """대회 예선 매치들에 코트와 시각을 자동 배정한다.
+    규칙:
+    - 코트 하나에 2개 조가 함께 배정 (총 6경기)
+    - 조1의 seq1(경기1) → 조2의 seq1(경기2) → 조1의 seq2(경기3) → 조2의 seq2(경기4) → 조1의 seq3(경기5) → 조2의 seq3(경기6) 순
+    - 시각은 tournament.start_time 부터 match_interval_min(기본 30분)씩 증가
+    호출자는 이후 db.session.commit() 해야 한다."""
+    from datetime import datetime, timedelta
+
+    interval = tournament.match_interval_min or 30
+    try:
+        base = datetime.strptime(tournament.start_time or "09:00", "%H:%M")
+    except ValueError:
+        base = datetime.strptime("09:00", "%H:%M")
+
+    # 두 조씩 짝지어 하나의 코트에 배정
+    court_no = 1
+    for pair_start in range(1, groups_count + 1, 2):
+        group_a = pair_start                      # 항상 존재
+        group_b = pair_start + 1 if pair_start + 1 <= groups_count else None
+        # 이 코트에서 진행될 총 매치 리스트를 seq_in_group 기준으로 만듦
+        # 코트 순서: A-1, B-1, A-2, B-2, A-3, B-3
+        court_seq = 0
+        max_seq = 3   # 조당 최대 경기 수 (3경기 방식)
+        for si in range(1, max_seq + 1):
+            for g in (group_a, group_b):
+                if not g:
+                    continue
+                m = (Match.query
+                     .filter_by(tournament_id=tournament.id, stage="prelim",
+                                 group_no=g, seq_in_group=si)
+                     .first())
+                if not m:
+                    continue
+                court_seq += 1
+                m.court = str(court_no)
+                m.court_seq = court_seq
+                m.scheduled_time = (base + timedelta(minutes=interval * (court_seq - 1))).strftime("%H:%M")
+        court_no += 1
+
+
+KST = timezone(timedelta(hours=9))
+
+
+def _kst_to_utc_naive(event_date: str, hhmm: str):
+    """KST '2026-08-01' + '09:00' → UTC naive datetime (2026-07-31 24:00 UTC).
+    파싱 실패 시 None."""
+    try:
+        local = datetime.strptime(f"{event_date} {hhmm}", "%Y-%m-%d %H:%M").replace(tzinfo=KST)
+        return local.astimezone(timezone.utc).replace(tzinfo=None)
+    except (ValueError, TypeError):
+        return None
+
+
+def _schedule_pre_match_sms(tournament: Tournament):
+    """대회 예선 매치들의 시작 20분 前 시각에 자동 SMS 발송을 DB에 예약.
+    - DB에 저장되므로 서버 재시작/재배포에 안전하다.
+    - 배경 워커(_sms_dispatcher_loop)가 30초마다 폴링하여 발송한다.
+    - 재예약 시(대진표 재생성 등) 이 대회의 미발송 예약을 먼저 정리한다."""
+    if not tournament.event_date:
+        return
+    # 재예약 시 이전 미발송 예약 삭제
+    ScheduledSms.query.filter_by(tournament_id=tournament.id, sent=False).delete(synchronize_session=False)
+    db.session.commit()
+
+    matches = Match.query.filter_by(tournament_id=tournament.id, stage="prelim").all()
+    now_utc = datetime.utcnow()
+    scheduled_count = 0
+    for m in matches:
+        if not m.scheduled_time:
+            continue
+        match_utc = _kst_to_utc_naive(tournament.event_date, m.scheduled_time)
+        if not match_utc:
+            continue
+        notify_utc = match_utc - timedelta(minutes=20)
+        # 이미 지난 시각이면 skip
+        if notify_utc <= now_utc:
+            continue
+        # 매치 참가자 수집 (단식 2명 / 복식 4명)
+        ids = [pid for pid in [m.player1_id, m.player1_partner_id,
+                                m.player2_id, m.player2_partner_id] if pid]
+        if not ids:
+            continue
+        users = User.query.filter(User.id.in_(ids)).all()
+        for u in users:
+            msg = (f"[위단테] {tournament.title} {m.group_no}조 {m.seq_in_group}경기가 "
+                   f"20분 뒤({m.scheduled_time})에 시작됩니다. "
+                   f"{u.name}님 {m.court or '?'}코트로 준비해주세요.")
+            db.session.add(ScheduledSms(
+                tournament_id=tournament.id, match_id=m.id, user_id=u.id,
+                phone=u.phone, message=msg, send_at=notify_utc,
+            ))
+            scheduled_count += 1
+    db.session.commit()
+    app.logger.info(f"[schedule] tournament {tournament.id}: {scheduled_count} SMS reservations added")
+
+
+def _dispatch_due_sms(limit: int = 50) -> int:
+    """DB에서 발송 시각이 지난 예약을 꺼내 실제로 SMS 발송.
+    반환값: 발송 시도 수. 워커 루프에서 호출됨. 앱 컨텍스트 안에서 실행되어야 함."""
+    now = datetime.utcnow()
+    due = (ScheduledSms.query
+           .filter(ScheduledSms.sent == False, ScheduledSms.send_at <= now)
+           .order_by(ScheduledSms.send_at)
+           .limit(limit).all())
+    if not due:
+        return 0
+    for s in due:
+        try:
+            r = send_sms(s.phone, s.message)
+            s.sent = True
+            s.sent_at = datetime.utcnow()
+            s.result = str(r)[:500]
+            db.session.add(SmsLog(
+                tournament_id=s.tournament_id, user_id=s.user_id,
+                message=s.message,
+                success=bool(r.get("success")),
+                provider_response=str(r.get("raw"))[:500]
+            ))
+        except Exception as e:
+            s.result = f"error: {e}"[:500]
+            app.logger.exception(f"SMS 발송 실패 (예약 id={s.id})")
+    db.session.commit()
+    return len(due)
+
+
+def _start_sms_dispatcher():
+    """eventlet 워커 안에서 백그라운드 SMS 발송 루프를 시작한다.
+    30초마다 만기된 예약을 확인하고 발송. 워커 재시작해도 DB 예약이 살아있어 재개된다."""
+    try:
+        import eventlet
+    except ImportError:
+        app.logger.warning("eventlet 미설치 - SMS 스케줄러 미가동 (예약된 SMS 발송 안 됨)")
+        return
+
+    def loop():
+        while True:
+            try:
+                eventlet.sleep(30)
+                with app.app_context():
+                    _dispatch_due_sms()
+            except Exception:
+                app.logger.exception("SMS dispatcher loop error")
+    eventlet.spawn(loop)
+    app.logger.info("SMS dispatcher started (30s polling)")
+
+
+# 관리자용 즉시 발송 트리거 (테스트/수동 배포 확인용)
+@app.route("/api/tournaments/<int:tid>/sms/dispatch-now", methods=["POST"])
+@login_required
+def api_sms_dispatch_now(tid):
+    """만기된 예약 SMS를 즉시 발송한다 (관리자 수동 트리거).
+    보통은 백그라운드 워커가 알아서 발송하지만 강제로 시도할 때 사용."""
+    t = Tournament.query.get_or_404(tid)
+    if not can_manage_tournament(current_user, t):
+        abort(403)
+    count = _dispatch_due_sms(limit=200)
+    return jsonify({"ok": True, "dispatched": count})
+
+
+@app.route("/api/tournaments/<int:tid>/sms/schedule", methods=["GET"])
+@login_required
+def api_sms_schedule(tid):
+    """이 대회에 예약된 SMS 목록 (관리자 확인용)."""
+    t = Tournament.query.get_or_404(tid)
+    if not can_manage_tournament(current_user, t):
+        abort(403)
+    items = (ScheduledSms.query
+             .filter_by(tournament_id=tid)
+             .order_by(ScheduledSms.send_at)
+             .all())
+    return jsonify({
+        "items": [{
+            "id": s.id, "match_id": s.match_id, "phone": s.phone,
+            "send_at_utc": s.send_at.isoformat() if s.send_at else None,
+            "send_at_kst": (s.send_at.replace(tzinfo=timezone.utc).astimezone(KST).strftime("%Y-%m-%d %H:%M") if s.send_at else None),
+            "sent": s.sent, "sent_at": s.sent_at.isoformat() if s.sent_at else None,
+            "result": s.result,
+        } for s in items]
+    })
+
+
+def generate_prelim_groups(tournament: Tournament, player_ids: list[int]):
+    """참가자를 조로 나누고 예선 매치 생성 + 코트/시각 자동 배정 + 20분 전 SMS 예약.
+    단식(singles): player_ids 는 유저 id 목록
+    복식(doubles): player_ids 는 TournamentParticipant 의 user_id 목록. 각 participant 의
+                    partner_id 를 조회해 팀 단위로 처리한다."""
+    players = player_ids[:]
+    random.shuffle(players)
+    gsize = tournament.group_size or 3
+    groups = [players[i:i + gsize] for i in range(0, len(players), gsize)]
+
+    build_main_bracket(tournament.id, len(groups))
+
+    for gi, group in enumerate(groups, start=1):
+        _build_group_matches(tournament.id, gi, group, tournament.format)
+
+    db.session.commit()
+    _assign_courts_and_schedule(tournament, len(groups))
+    db.session.commit()
+    _schedule_pre_match_sms(tournament)
+    return groups
+
+
+def _build_group_matches(tournament_id: int, group_no: int, group: list[int], fmt: str = "singles"):
+    """조 하나의 예선 매치들 생성. 복식이면 각 참가자의 파트너까지 매치에 저장한다."""
+    # 복식이면 partner_id 미리 조회
+    partner_map = {}
+    if fmt == "doubles":
+        parts = TournamentParticipant.query.filter(
+            TournamentParticipant.tournament_id == tournament_id,
+            TournamentParticipant.user_id.in_(group)
+        ).all()
+        partner_map = {p.user_id: p.partner_id for p in parts}
+
+    def team(uid):
+        return uid, partner_map.get(uid) if fmt == "doubles" else None
+
+    if len(group) == 1:
+        _set_group_winner_slot(tournament_id, group_no, group[0])
+        return
+
+    if len(group) == 3:
+        u1, u2, u3 = group
+        p1a, p1b = team(u1)
+        p2a, p2b = team(u2)
+        p3a, p3b = team(u3)
+        m1 = Match(tournament_id=tournament_id, stage="prelim", group_no=group_no,
+                    seq_in_group=1, player1_id=p1a, player1_partner_id=p1b,
+                    player2_id=p2a, player2_partner_id=p2b,
+                    status="시작전", duration_min=20)
+        db.session.add(m1); db.session.flush()
+        m2 = Match(tournament_id=tournament_id, stage="prelim", group_no=group_no,
+                    seq_in_group=2, player1_id=None, player1_partner_id=None,
+                    player2_id=p3a, player2_partner_id=p3b,
+                    source_match_id=m1.id, source_role="winner",
+                    status="시작전", duration_min=20)
+        m3 = Match(tournament_id=tournament_id, stage="prelim", group_no=group_no,
+                    seq_in_group=3, player1_id=None, player1_partner_id=None,
+                    player2_id=p3a, player2_partner_id=p3b,
+                    source_match_id=m1.id, source_role="loser",
+                    status="시작전", duration_min=20)
+        db.session.add_all([m2, m3])
+        return
+
+    if len(group) == 2:
+        u1, u2 = group
+        p1a, p1b = team(u1)
+        p2a, p2b = team(u2)
+        m = Match(tournament_id=tournament_id, stage="prelim", group_no=group_no,
+                   seq_in_group=1, player1_id=p1a, player1_partner_id=p1b,
+                   player2_id=p2a, player2_partner_id=p2b,
+                   status="시작전", duration_min=20)
+        db.session.add(m)
+        return
+
+    # 4명 이상 - 라운드로빈 fallback
+    seq = 0
+    for a in range(len(group)):
+        for b in range(a + 1, len(group)):
+            seq += 1
+            pa_a, pa_b = team(group[a])
+            pb_a, pb_b = team(group[b])
+            m = Match(tournament_id=tournament_id, stage="prelim", group_no=group_no,
+                       seq_in_group=seq, player1_id=pa_a, player1_partner_id=pa_b,
+                       player2_id=pb_a, player2_partner_id=pb_b,
+                       status="시작전", duration_min=20)
+            db.session.add(m)
+
+
 def generate_manual_groups(tournament: Tournament, manual_groups: list[list[int]]):
-    """관리자가 조 구성을 직접 지정한 경우의 대진표 생성.
-    manual_groups: [[선수id, 선수id, ...], [...], ...]  각 원소가 하나의 조.
-    generate_prelim_groups 와 동일한 규칙으로 조 내 라운드로빈 + 본선 슬롯 자동 배치."""
+    """관리자가 조 구성을 직접 지정한 경우."""
     if not manual_groups:
         return []
     build_main_bracket(tournament.id, len(manual_groups))
     for gi, group in enumerate(manual_groups, start=1):
-        if len(group) == 1:
-            _set_group_winner_slot(tournament.id, gi, group[0])
-            continue
-        for a in range(len(group)):
-            for b in range(a + 1, len(group)):
-                m = Match(tournament_id=tournament.id, stage="prelim", group_no=gi,
-                          player1_id=group[a], player2_id=group[b], status="시작전")
-                db.session.add(m)
+        _build_group_matches(tournament.id, gi, group, tournament.format)
     db.session.commit()
+    _assign_courts_and_schedule(tournament, len(manual_groups))
+    db.session.commit()
+    _schedule_pre_match_sms(tournament)
     return manual_groups
 
 
@@ -554,9 +829,12 @@ def new_icon():
         abort(403)
     if request.method == "POST":
         f = request.form
+        w = max(24, min(240, int(f.get("icon_width") or f.get("icon_size") or 64)))
+        h = max(24, min(240, int(f.get("icon_height") or f.get("icon_size") or 64)))
         icon = QuickIcon(
             label=f["label"], icon_url=f.get("icon_url") or None,
-            icon_size=max(24, min(160, int(f.get("icon_size") or 64))),
+            icon_size=w,   # 하위호환 (구 컬럼에도 저장)
+            icon_width=w, icon_height=h,
             link_type=f.get("link_type") or "external",
             link_url=f.get("link_url") or None,
             sort_order=int(f.get("sort_order") or 0),
@@ -578,9 +856,13 @@ def edit_icon(iid):
     icon = QuickIcon.query.get_or_404(iid)
     if request.method == "POST":
         f = request.form
+        w = max(24, min(240, int(f.get("icon_width") or f.get("icon_size") or 64)))
+        h = max(24, min(240, int(f.get("icon_height") or f.get("icon_size") or 64)))
         icon.label = f["label"]
         icon.icon_url = f.get("icon_url") or None
-        icon.icon_size = max(24, min(160, int(f.get("icon_size") or 64)))
+        icon.icon_size = w
+        icon.icon_width = w
+        icon.icon_height = h
         icon.link_type = f.get("link_type") or "external"
         icon.link_url = f.get("link_url") or None
         icon.sort_order = int(f.get("sort_order") or 0)
@@ -689,6 +971,9 @@ def new_tournament():
             title=f["title"], location=f.get("location"), event_date=f.get("event_date"),
             entry_fee=int(f.get("entry_fee") or 0),
             group_size=int(f.get("group_size") or 3),
+            format=f.get("format") or "singles",
+            start_time=f.get("start_time") or "09:00",
+            match_interval_min=int(f.get("match_interval_min") or 30),
             parking_url=f.get("parking_url") or None,
             deposit_bank=f.get("deposit_bank") or None,
             deposit_account=f.get("deposit_account") or None,
@@ -821,6 +1106,87 @@ def api_generate_draw(tid):
     return jsonify({"ok": True})
 
 
+def _advance_prelim_winner_loser(m: Match):
+    """예선 경기 종료 시, 이 경기의 승자/패자를 다음 매치(seq 2, 3)에 자동 배치.
+    복식이면 파트너 정보도 함께 이동한다."""
+    if m.stage != "prelim" or not m.winner_id:
+        return
+    # 승자 팀 (와 파트너)
+    if m.winner_id == m.player1_id:
+        w_uid, w_partner = m.player1_id, m.player1_partner_id
+        l_uid, l_partner = m.player2_id, m.player2_partner_id
+    else:
+        w_uid, w_partner = m.player2_id, m.player2_partner_id
+        l_uid, l_partner = m.player1_id, m.player1_partner_id
+
+    dependents = Match.query.filter_by(
+        tournament_id=m.tournament_id, stage="prelim", source_match_id=m.id
+    ).all()
+    for d in dependents:
+        if d.source_role == "winner":
+            uid, partner = w_uid, w_partner
+        else:
+            uid, partner = l_uid, l_partner
+        if d.player1_id is None:
+            d.player1_id = uid
+            d.player1_partner_id = partner
+        elif d.player2_id is None:
+            d.player2_id = uid
+            d.player2_partner_id = partner
+    db.session.flush()
+
+
+def _finalize_prelim_group(tournament_id: int, group_no: int):
+    """조 내 모든 경기 종료 시 조 우승자를 자동 결정하고 본선에 반영.
+    - 3경기 방식이면 seq=2 매치(승자결정전)의 승자가 조 우승자
+    - 라운드로빈이면 승수 최다자
+    - 2명이면 유일 매치의 승자"""
+    matches = (Match.query
+               .filter_by(tournament_id=tournament_id, stage="prelim", group_no=group_no)
+               .order_by(Match.seq_in_group.nulls_last()).all())
+    if not matches or any(x.status != "종료" for x in matches):
+        return None
+    # 3경기 방식: seq=2 매치(승자결정전) 승자가 조 우승자
+    if len(matches) == 3 and any(x.seq_in_group == 2 for x in matches):
+        m2 = next(x for x in matches if x.seq_in_group == 2)
+        return m2.winner_id
+    # 2명: 유일 매치의 승자
+    if len(matches) == 1:
+        return matches[0].winner_id
+    # 라운드로빈: 승수 최다자
+    wins = {}
+    for m in matches:
+        if m.winner_id:
+            wins[m.winner_id] = wins.get(m.winner_id, 0) + 1
+    if not wins:
+        return None
+    return max(wins, key=wins.get)
+
+
+def _schedule_next_match_notification(match: Match):
+    """[Deprecated] 예전에는 경기 '시작 후' 20분 뒤 다음 조원에게 문자를 보냈으나,
+    이제는 시간표 자동 배정 시 각 매치 '시작 20분 前' 발송으로 대체됨.
+    (호환용으로 남겨두었으며 별도로 호출되지 않음)"""
+    return
+
+
+@app.route("/api/matches/<int:mid>/start", methods=["POST"])
+@login_required
+def api_start_match(mid):
+    """경기 시작 - 관리자가 명시적으로 표시. 다음 경기 참가자에게는 이미 대진표 생성 시
+    '시작 20분 前 문자'가 자동 예약되어 있으므로 여기서는 상태 변경만 처리."""
+    m = Match.query.get_or_404(mid)
+    if not can_manage_tournament(current_user, m.tournament):
+        abort(403)
+    if m.status != "종료":
+        m.status = "진행중"
+        m.started_at = datetime.utcnow()
+        db.session.commit()
+    socketio.emit("bracket_update", {"tournament_id": m.tournament_id},
+                   room=f"tournament_{m.tournament_id}")
+    return jsonify({"ok": True, "started_at": m.started_at.isoformat() if m.started_at else None})
+
+
 @app.route("/api/matches/<int:mid>/score", methods=["POST"])
 @login_required
 def api_submit_score(mid):
@@ -846,6 +1212,14 @@ def api_submit_score(mid):
                 "winner_id": t.winner_id,
                 "winner_name": t.winner.name if t.winner else None,
             }, room=f"tournament_{t.id}")
+    elif m.stage == "prelim":
+        # 다음 예선 경기(승자/패자 대기 매치)에 자동 배치
+        _advance_prelim_winner_loser(m)
+        # 조 전체가 끝났으면 조 우승자를 본선 슬롯에 자동 반영
+        winner_id = _finalize_prelim_group(m.tournament_id, m.group_no)
+        if winner_id:
+            _set_group_winner_slot(m.tournament_id, m.group_no, winner_id)
+        db.session.commit()
 
     socketio.emit("bracket_update", {"tournament_id": m.tournament_id},
                    room=f"tournament_{m.tournament_id}")
@@ -869,6 +1243,7 @@ def api_get_draw(tid):
     prelim = (Match.query
               .filter_by(tournament_id=tid, stage="prelim")
               .options(joinedload(Match.player1), joinedload(Match.player2))
+              .order_by(Match.group_no, Match.seq_in_group.nulls_last())
               .all())
     main = (Match.query
             .filter_by(tournament_id=tid, stage="main")
@@ -878,14 +1253,24 @@ def api_get_draw(tid):
     def m2d(m):
         return {
             "id": m.id, "stage": m.stage, "group_no": m.group_no,
+            "seq_in_group": m.seq_in_group,
             "round_name": m.round_name, "match_no": m.match_no,
             "player1": m.player1.name if m.player1 else None,
             "player1_id": m.player1_id,
+            "player1_partner": m.player1_partner.name if m.player1_partner else None,
+            "player1_partner_id": m.player1_partner_id,
             "player2": m.player2.name if m.player2 else None,
             "player2_id": m.player2_id,
+            "player2_partner": m.player2_partner.name if m.player2_partner else None,
+            "player2_partner_id": m.player2_partner_id,
             "score": m.score, "status": m.status,
             "winner_id": m.winner_id,
-            "court": m.court, "scheduled_time": m.scheduled_time,
+            "court": m.court, "court_seq": m.court_seq,
+            "scheduled_time": m.scheduled_time,
+            "started_at": m.started_at.isoformat() if m.started_at else None,
+            "duration_min": m.duration_min or 20,
+            "source_match_id": m.source_match_id,
+            "source_role": m.source_role,
         }
     return jsonify({"prelim": [m2d(m) for m in prelim], "main": [m2d(m) for m in main]})
 
@@ -977,6 +1362,48 @@ def api_mark_paid(pid):
         "status": p.status, "action": "update"
     }, room=f"tournament_{p.tournament_id}_admin")
     return jsonify({"ok": True, "status": p.status})
+
+
+@app.route("/api/participants/<int:pid>/partner", methods=["POST"])
+@login_required
+def api_set_participant_partner(pid):
+    """복식 대회에서 관리자가 참가자 파트너를 지정. 상호 파트너 관계 자동 동기화."""
+    p = TournamentParticipant.query.get_or_404(pid)
+    if not can_manage_tournament(current_user, p.tournament):
+        abort(403)
+    partner_id = (request.json or {}).get("partner_id")
+    partner_id = int(partner_id) if partner_id else None
+
+    # 이전 파트너 관계 해제
+    if p.partner_id and p.partner_id != partner_id:
+        prev = TournamentParticipant.query.filter_by(
+            tournament_id=p.tournament_id, user_id=p.partner_id
+        ).first()
+        if prev and prev.partner_id == p.user_id:
+            prev.partner_id = None
+
+    p.partner_id = partner_id
+
+    # 상대방도 나를 파트너로 자동 지정
+    if partner_id:
+        other = TournamentParticipant.query.filter_by(
+            tournament_id=p.tournament_id, user_id=partner_id
+        ).first()
+        if other:
+            # 상대의 이전 파트너 해제
+            if other.partner_id and other.partner_id != p.user_id:
+                prev2 = TournamentParticipant.query.filter_by(
+                    tournament_id=p.tournament_id, user_id=other.partner_id
+                ).first()
+                if prev2 and prev2.partner_id == partner_id:
+                    prev2.partner_id = None
+            other.partner_id = p.user_id
+    db.session.commit()
+    socketio.emit("participant_update", {
+        "tournament_id": p.tournament_id, "participant_id": p.id,
+        "status": p.status, "action": "update"
+    }, room=f"tournament_{p.tournament_id}_admin")
+    return jsonify({"ok": True, "partner_id": p.partner_id})
 
 
 @app.route("/api/participants/<int:pid>/confirm", methods=["POST"])
@@ -1448,6 +1875,9 @@ with app.app_context():
         _apply_lightweight_migrations()
     except Exception:
         app.logger.exception("boot-time schema sync failed")
+
+# 백그라운드 SMS 발송 워커 시작 (eventlet 있으면)
+_start_sms_dispatcher()
 
 
 if __name__ == "__main__":

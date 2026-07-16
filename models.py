@@ -43,8 +43,8 @@ class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
     organizer_id = db.Column(db.Integer, db.ForeignKey("organizers.id"), nullable=True)
 
-    name = db.Column(db.String(50), nullable=False)            # 실명
-    phone = db.Column(db.String(20), unique=True, nullable=False)
+    name = db.Column(db.String(50), nullable=False, index=True)  # 실명 (검색용 인덱스)
+    phone = db.Column(db.String(20), unique=True, nullable=False, index=True)
     region = db.Column(db.String(50))                          # 지역
     club = db.Column(db.String(80))                            # 소속클럽
     _refund_bank_enc = db.Column("refund_bank_enc", db.String(255))     # 암호화 저장
@@ -89,7 +89,10 @@ class Tournament(db.Model):
     event_date = db.Column(db.String(20))            # "2026-07-15"
     entry_fee = db.Column(db.Integer, default=0)
     status = db.Column(db.String(20), default="접수중")  # 접수중 / 접수마감 / 진행중 / 종료
-    group_size = db.Column(db.Integer, default=3)    # 예선 조 인원
+    format = db.Column(db.String(10), default="singles")   # singles | doubles
+    group_size = db.Column(db.Integer, default=3)    # 예선 조 인원(단식) / 조 팀 수(복식)
+    start_time = db.Column(db.String(10), default="09:00")   # 첫 경기 시작 시각
+    match_interval_min = db.Column(db.Integer, default=30)  # 경기 간격(분)
     parking_url = db.Column(db.String(400))          # 주차등록 링크 (외부)
     deposit_bank = db.Column(db.String(40))          # 참가비 입금계좌 은행
     deposit_account = db.Column(db.String(40))       # 참가비 입금계좌 번호
@@ -110,15 +113,17 @@ class TournamentParticipant(db.Model):
     그대로 쓰기 때문에 매번 인적사항을 다시 적을 필요가 없다."""
     __tablename__ = "tournament_participants"
     id = db.Column(db.Integer, primary_key=True)
-    tournament_id = db.Column(db.Integer, db.ForeignKey("tournaments.id"), nullable=False)
-    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    tournament_id = db.Column(db.Integer, db.ForeignKey("tournaments.id"), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     # 대기 -> 입금확인요청(선수가 입금했다고 표시) -> 확정(관리자가 확인)  |  참가비 0원이면 바로 확정
     status = db.Column(db.String(20), default="대기")
+    partner_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)  # 복식 팀 파트너
     applied_at = db.Column(db.DateTime, default=datetime.utcnow)
     confirmed_at = db.Column(db.DateTime)
 
     tournament = db.relationship("Tournament")
-    user = db.relationship("User")
+    user = db.relationship("User", foreign_keys=[user_id])
+    partner = db.relationship("User", foreign_keys=[partner_id])
 
     __table_args__ = (db.UniqueConstraint("tournament_id", "user_id", name="uq_tournament_user"),)
 
@@ -155,20 +160,26 @@ class Match(db.Model):
     stage='main' 이면 round_name/match_no 로 토너먼트 트리를 구성한다."""
     __tablename__ = "matches"
     id = db.Column(db.Integer, primary_key=True)
-    tournament_id = db.Column(db.Integer, db.ForeignKey("tournaments.id"), nullable=False)
+    tournament_id = db.Column(db.Integer, db.ForeignKey("tournaments.id"), nullable=False, index=True)
 
     stage = db.Column(db.String(10), nullable=False)   # 'prelim' | 'main'
-    group_no = db.Column(db.Integer)                    # 예선 조 번호 (prelim 전용)
+    group_no = db.Column(db.Integer, index=True)        # 예선 조 번호 (prelim 전용)
+    seq_in_group = db.Column(db.Integer)                # 예선 조 내 경기 순번 (1,2,3)
     round_name = db.Column(db.String(20))                # '32강','16강','8강','4강','결승' (main 전용)
     match_no = db.Column(db.Integer)                     # 같은 라운드 내 경기 번호
 
     player1_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    player1_partner_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)  # 복식 team1 파트너
     player2_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    player2_partner_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)  # 복식 team2 파트너
     score = db.Column(db.String(50))                     # "6-3,6-4"
     winner_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
 
     court = db.Column(db.String(30))
-    scheduled_time = db.Column(db.String(20))
+    court_seq = db.Column(db.Integer)                    # 이 코트에서 몇 번째 경기 (1~6)
+    scheduled_time = db.Column(db.String(20))            # "09:00" 예정 시각 표시용
+    started_at = db.Column(db.DateTime, nullable=True)   # 실제 시작 시각 (자동 SMS 트리거 기준)
+    duration_min = db.Column(db.Integer, default=20)     # 경기 시간(분). 지나면 다음 조원에게 SMS
     status = db.Column(db.String(20), default="시작전")   # 시작전 / 진행중 / 종료
 
     # 본선 1라운드 슬롯이 "몇 조 우승자 자리"인지 명시적으로 기록 (stage='main' 1라운드 전용)
@@ -179,8 +190,16 @@ class Match(db.Model):
     next_match_id = db.Column(db.Integer, db.ForeignKey("matches.id"), nullable=True)
     next_match_slot = db.Column(db.Integer, nullable=True)
 
+    # 예선 3경기 방식용 종속성 (seq_in_group=2,3 에서 사용)
+    # source_match_id: 이 매치의 특정 슬롯이 참조하는 이전 매치의 id
+    # source_role: 'winner' | 'loser'  이전 매치에서 승자/패자 중 누가 오는지
+    source_match_id = db.Column(db.Integer, db.ForeignKey("matches.id"), nullable=True)
+    source_role = db.Column(db.String(10), nullable=True)   # winner|loser
+
     player1 = db.relationship("User", foreign_keys=[player1_id])
+    player1_partner = db.relationship("User", foreign_keys=[player1_partner_id])
     player2 = db.relationship("User", foreign_keys=[player2_id])
+    player2_partner = db.relationship("User", foreign_keys=[player2_partner_id])
     winner = db.relationship("User", foreign_keys=[winner_id])
 
 
@@ -227,6 +246,25 @@ class SmsLog(db.Model):
     provider_response = db.Column(db.Text)
 
 
+class ScheduledSms(db.Model):
+    """예약 발송 SMS. 대진표 생성 시 각 매치의 시작 20분 前 시각으로 예약된다.
+    백그라운드 워커(app._sms_dispatcher_loop)가 주기적으로 폴링해 발송한다.
+    DB에 저장되므로 서버 재시작/재배포에도 예약이 보존된다."""
+    __tablename__ = "scheduled_sms"
+    id = db.Column(db.Integer, primary_key=True)
+    tournament_id = db.Column(db.Integer, db.ForeignKey("tournaments.id"), nullable=False, index=True)
+    match_id = db.Column(db.Integer, db.ForeignKey("matches.id"), nullable=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    phone = db.Column(db.String(20), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    # send_at 은 UTC 기준 naive datetime (Neon/Railway 서버 시간대에 관계없이 일관 처리)
+    send_at = db.Column(db.DateTime, nullable=False, index=True)
+    sent = db.Column(db.Boolean, default=False, index=True)
+    sent_at = db.Column(db.DateTime, nullable=True)
+    result = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
 class PhoneVerification(db.Model):
     """회원가입 시 전화번호 SMS 인증용 임시 코드 저장."""
     __tablename__ = "phone_verifications"
@@ -264,7 +302,9 @@ class QuickIcon(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     label = db.Column(db.String(40), nullable=False)
     icon_url = db.Column(db.Text)              # 업로드했거나 외부에서 가져온 아이콘 이미지 주소
-    icon_size = db.Column(db.Integer, default=64)  # 아이콘 표시 크기(px)
+    icon_size = db.Column(db.Integer, default=64)  # (하위호환) 이전 정사각 크기
+    icon_width = db.Column(db.Integer, default=64)   # 가로 크기(px)
+    icon_height = db.Column(db.Integer, default=64)  # 세로 크기(px)
     link_type = db.Column(db.String(20), default="external")   # external | calendar
     link_url = db.Column(db.Text)              # link_type == external 일 때 이동할 주소
     sort_order = db.Column(db.Integer, default=0)

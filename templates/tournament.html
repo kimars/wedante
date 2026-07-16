@@ -47,7 +47,7 @@
 <div class="card" id="apply-card">
   <div class="card-row">
     <div>
-      <strong>참가 신청</strong>
+      <strong>참가 신청 현황</strong>
       <p style="font-size:13px;color:var(--ink-faint);margin:4px 0 0;">참가비 {{ "{:,}".format(t.entry_fee) }}원 · 현재 {{ participant_count }}명 신청</p>
     </div>
     <div id="apply-action">
@@ -158,31 +158,65 @@
 </div>
 {% endif %}
 
-<h2>코트 현황</h2>
-<div id="court-board" class="group-grid"><p style="color:var(--ink-faint);">배정된 코트가 없습니다.</p></div>
-
-<h2>대회 일정</h2>
-<div id="schedule-list" class="card"><p style="color:var(--ink-faint);margin:0;">아직 시간이 배정된 경기가 없습니다.</p></div>
-
-<h2>예선 (조별)</h2>
-<div id="prelim-groups" class="group-grid">
-  {% for gno, matches in groups.items() %}
-  <div class="group-card">
-    <h3>{{ gno }}조</h3>
-    {% for m in matches %}
-    <div class="match-row">
-      <span>{{ m.player1.name if m.player1 else '-' }} vs {{ m.player2.name if m.player2 else '-' }}</span>
-      <span class="score">{{ m.score or (m.status if m.status != '시작전' else '') }}</span>
-    </div>
-    {% endfor %}
-  </div>
-  {% else %}
-  <p>아직 예선 대진표가 생성되지 않았습니다.</p>
-  {% endfor %}
+<h2>예선 대진표</h2>
+<div class="bracket-tabs">
+  <button class="bracket-tab active" data-tab="prelim" onclick="switchBracketTab('prelim')">예선</button>
+  <button class="bracket-tab" data-tab="main" onclick="switchBracketTab('main')">본선</button>
 </div>
 
-<h2>본선 (추첨 결과)</h2>
-<div id="main-bracket" class="bracket"></div>
+<div id="bracket-tab-prelim" class="bracket-tab-panel">
+  <div class="prelim-header">
+    <div class="prelim-progress">
+      예선 진행률 <strong id="prelim-progress-text">0.0%</strong>
+      <div class="prelim-progress-bar"><div class="prelim-progress-fill" id="prelim-progress-fill" style="width:0%;"></div></div>
+      <span class="prelim-progress-count" id="prelim-progress-count">0/0</span>
+    </div>
+  </div>
+  <div id="prelim-groups" class="prelim-groups">
+    {% for gno, matches in groups.items() %}
+    <div class="prelim-group-card" data-group="{{ gno }}">
+      <div class="prelim-group-head">
+        <span class="prelim-group-title">{{ gno }}조</span>
+        <span class="prelim-group-badge" data-badge-group="{{ gno }}">시작전</span>
+      </div>
+      {% for m in matches %}
+      <div class="prelim-match-row">
+        <div class="prelim-match-label">
+          {% if m.seq_in_group == 1 or matches|length == 1 %}
+            {{ m.player1.name if m.player1 else '?' }} <span class="vs">vs</span> {{ m.player2.name if m.player2 else '?' }}
+          {% elif m.seq_in_group == 2 %}
+            <span class="prev-ref">1경기 승자</span> <span class="vs">vs</span> {{ m.player2.name if m.player2 else '?' }}
+          {% elif m.seq_in_group == 3 %}
+            <span class="prev-ref">1경기 패자</span> <span class="vs">vs</span> {{ m.player2.name if m.player2 else '?' }}
+          {% else %}
+            {{ m.player1.name if m.player1 else '?' }} <span class="vs">vs</span> {{ m.player2.name if m.player2 else '?' }}
+          {% endif %}
+        </div>
+        <div class="prelim-match-meta">
+          {% if m.scheduled_time %}<span class="time-chip">🕐 {{ m.scheduled_time }}</span>{% endif %}
+          <span class="score-chip {% if m.status == '진행중' %}live{% elif m.status == '종료' %}done{% endif %}">
+            {% if m.status == '종료' and m.score %}{{ m.score }}
+            {% elif m.status == '진행중' %}진행중
+            {% else %}시작전
+            {% endif %}
+          </span>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p style="grid-column:1/-1;color:var(--ink-faint);">아직 예선 대진표가 생성되지 않았습니다.</p>
+    {% endfor %}
+  </div>
+</div>
+
+<div id="bracket-tab-main" class="bracket-tab-panel" style="display:none;">
+  <h3 style="margin-top:0;">본선 대진표</h3>
+  <div id="main-bracket" class="bracket"></div>
+</div>
+
+<h2 style="margin-top:32px;">코트 현황</h2>
+<div id="court-board" class="group-grid"><p style="color:var(--ink-faint);">배정된 코트가 없습니다.</p></div>
 
 {% endblock %}
 
@@ -376,31 +410,111 @@ function searchPlayer() {
 }
 document.getElementById("search-input").addEventListener("keydown", (e) => { if (e.key === "Enter") searchPlayer(); });
 
+function switchBracketTab(name) {
+  document.querySelectorAll(".bracket-tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
+  document.getElementById("bracket-tab-prelim").style.display = name === "prelim" ? "" : "none";
+  document.getElementById("bracket-tab-main").style.display = name === "main" ? "" : "none";
+}
+
 function loadDraw() {
   fetch(`/api/tournaments/${TID}/draw`)
     .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
     .then(data => {
       renderPrelim(data.prelim);
       renderMain(data.main);
-      renderCourtsAndSchedule(data.prelim.concat(data.main));
+      renderCourts(data.prelim.concat(data.main));
     })
     .catch(err => console.error("Draw load failed:", err));
 }
 
+function teamLabel(name, partner) {
+  // 복식이면 "홍길동/김철수", 단식이면 "홍길동"
+  if (!name) return "?";
+  return partner ? `${name}/${partner}` : name;
+}
+
 function renderPrelim(matches) {
+  const el = document.getElementById("prelim-groups");
+  if (matches.length === 0) {
+    el.innerHTML = '<p style="grid-column:1/-1;color:var(--ink-faint);">아직 예선 대진표가 생성되지 않았습니다.</p>';
+    document.getElementById("prelim-progress-text").innerText = "0.0%";
+    document.getElementById("prelim-progress-fill").style.width = "0%";
+    document.getElementById("prelim-progress-count").innerText = "0/0";
+    return;
+  }
+  // 조 번호별로 그룹핑
   const groups = {};
   matches.forEach(m => { (groups[m.group_no] ||= []).push(m); });
-  const el = document.getElementById("prelim-groups");
-  if (Object.keys(groups).length === 0) return;
-  el.innerHTML = Object.entries(groups).map(([gno, ms]) => `
-    <div class="group-card">
-      <h3>${gno}조</h3>
-      ${ms.map(m => `
-        <div class="match-row">
-          <span>${m.player1 || '-'} vs ${m.player2 || '-'}</span>
-          <span class="score">${m.score || (m.status !== '시작전' ? m.status : '')}</span>
-        </div>`).join("")}
-    </div>`).join("");
+  const gnos = Object.keys(groups).map(Number).sort((a,b)=>a-b);
+  // 각 조에 소속된 코트 정보 (첫 매치의 court)
+  el.innerHTML = gnos.map(gno => {
+    const ms = groups[gno].sort((a,b) => (a.seq_in_group||0) - (b.seq_in_group||0));
+    const court = ms[0] ? ms[0].court : null;
+    const allDone = ms.every(m => m.status === "종료");
+    const inProgress = ms.some(m => m.status === "진행중");
+    const badgeClass = allDone ? "done" : (inProgress ? "live" : "");
+    const badgeText = allDone ? "종료" : (inProgress ? "진행중" : "시작전");
+    return `
+      <div class="prelim-group-card ${allDone ? 'group-done' : ''}">
+        <div class="prelim-group-head">
+          <span class="prelim-group-title">${gno}조${court ? ` <span class="court-chip">코트 ${court}</span>` : ''}</span>
+          <span class="prelim-group-badge ${badgeClass}">${badgeText}</span>
+        </div>
+        ${ms.map(m => {
+          const srcMatch = m.source_match_id ? ms.find(x=>x.id===m.source_match_id) : null;
+          const p1Label = m.player1 ? teamLabel(m.player1, m.player1_partner)
+                          : (srcMatch ? `${srcMatch.seq_in_group}경기 ${m.source_role === 'winner' ? '승자' : '패자'}` : '?');
+          const p2Label = m.player2 ? teamLabel(m.player2, m.player2_partner) : '?';
+          const timeChip = m.scheduled_time ? `<span class="time-chip">🕐 ${m.scheduled_time}</span>` : '';
+          const scoreClass = m.status === '진행중' ? 'live' : (m.status === '종료' ? 'done' : '');
+          let scoreLabel;
+          if (m.status === '종료') {
+            scoreLabel = m.score ? escapeHtml(m.score) : '종료';
+          } else if (m.status === '진행중') {
+            const min = m.started_at ? elapsedMinutes(m.started_at) : 0;
+            scoreLabel = `진행중 <span class="live-timer">${min}분</span>`;
+          } else {
+            scoreLabel = '시작전';
+          }
+          const seqBadge = m.seq_in_group ? `<span class="seq-badge">${m.seq_in_group}경기</span>` : '';
+          const startedAttr = m.started_at ? `data-started-at="${m.started_at}"` : '';
+          return `
+            <div class="prelim-match-row" ${startedAttr}>
+              <div class="prelim-match-label">${seqBadge} ${escapeHtml(p1Label)} <span class="vs">vs</span> ${escapeHtml(p2Label)}</div>
+              <div class="prelim-match-meta">${timeChip}<span class="score-chip ${scoreClass}">${scoreLabel}</span></div>
+            </div>`;
+        }).join("")}
+      </div>`;
+  }).join("");
+
+  // 진행률
+  const total = matches.length;
+  const done = matches.filter(m => m.status === "종료").length;
+  const pct = total > 0 ? (done / total * 100).toFixed(1) : "0.0";
+  document.getElementById("prelim-progress-text").innerText = pct + "%";
+  document.getElementById("prelim-progress-fill").style.width = pct + "%";
+  document.getElementById("prelim-progress-count").innerText = `${done}/${total}`;
+}
+
+function renderMatchLabel(m, groupMatches) {
+  // 각 슬롯이 이전 매치의 승자/패자를 참조하는 경우 그것을 표시
+  const p1 = m.player1 || (m.source_match_id ? refLabel(groupMatches, m.source_match_id, m.source_role, "p1") : "?");
+  const p2 = m.player2 || "?";
+  return `${escapeHtml(p1)} <span class="vs">vs</span> ${escapeHtml(p2)}`;
+}
+function refLabel(groupMatches, srcId, role, slot) {
+  const src = groupMatches.find(x => x.id === srcId);
+  if (!src) return "?";
+  const seq = src.seq_in_group || "";
+  return role === "winner" ? `${seq}경기 승자` : `${seq}경기 패자`;
+}
+function elapsedMinutes(iso) {
+  const then = new Date(iso).getTime();
+  const now = Date.now();
+  return Math.max(0, Math.floor((now - then) / 60000));
+}
+function escapeHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
 }
 
 function renderMain(matches) {
@@ -408,47 +522,62 @@ function renderMain(matches) {
   matches.forEach(m => { (rounds[m.round_name] ||= []).push(m); });
   const el = document.getElementById("main-bracket");
   el.innerHTML = "";
-  Object.entries(rounds).forEach(([rname, ms]) => {
+  const ROUND_ORDER = ["128강","64강","32강","16강","8강","준결승","결승"];
+  const sortedRounds = Object.keys(rounds).sort((a,b) => ROUND_ORDER.indexOf(a) - ROUND_ORDER.indexOf(b));
+  if (sortedRounds.length === 0) {
+    el.innerHTML = '<p style="color:var(--ink-faint);">아직 본선 대진표가 없습니다.</p>';
+    return;
+  }
+  sortedRounds.forEach(rname => {
+    const ms = rounds[rname];
     const col = document.createElement("div");
     col.className = "bracket-round";
     col.innerHTML = `<div class="round-label">${rname}</div>` + ms.sort((a,b)=>a.match_no-b.match_no).map(m => `
       <div class="bracket-match ${m.status === '종료' ? 'done' : ''}">
-        <div class="p ${m.winner_id && m.player1 ? 'win' : ''}">${m.player1 || '-'}</div>
-        <div class="p ${m.winner_id && m.player2 ? 'win' : ''}">${m.player2 || '-'}</div>
-        ${m.score ? `<div style="font-size:11px;color:var(--ink-soft);margin-top:4px;">${m.score}</div>` : ""}
+        <div class="p ${m.winner_id && m.winner_id === m.player1_id ? 'win' : ''}">${escapeHtml(m.player1) || '?'}</div>
+        <div class="p ${m.winner_id && m.winner_id === m.player2_id ? 'win' : ''}">${escapeHtml(m.player2) || '?'}</div>
+        ${m.score ? `<div style="font-size:11px;color:var(--ink-soft);margin-top:4px;">${escapeHtml(m.score)}</div>` : ""}
       </div>`).join("");
     el.appendChild(col);
   });
 }
 
-function renderCourtsAndSchedule(all) {
+function renderCourts(all) {
   const withCourt = all.filter(m => m.court);
   const courtBoard = document.getElementById("court-board");
-  if (withCourt.length) {
-    const byCourt = {};
-    withCourt.forEach(m => { (byCourt[m.court] ||= []).push(m); });
-    courtBoard.innerHTML = Object.entries(byCourt).map(([court, ms]) => `
-      <div class="group-card">
-        <h3>${court}코트</h3>
-        ${ms.map(m => `
-          <div class="match-row">
-            <span>${m.player1 || '-'} vs ${m.player2 || '-'}</span>
-            <span class="score">${m.scheduled_time || m.status}</span>
-          </div>`).join("")}
-      </div>`).join("");
+  if (!withCourt.length) {
+    courtBoard.innerHTML = '<p style="color:var(--ink-faint);">배정된 코트가 없습니다.</p>';
+    return;
   }
-
-  const withTime = all.filter(m => m.scheduled_time).sort((a,b) => (a.scheduled_time||"").localeCompare(b.scheduled_time||""));
-  const scheduleList = document.getElementById("schedule-list");
-  if (withTime.length) {
-    scheduleList.innerHTML = withTime.map(m => `
-      <div class="match-row">
-        <span>${m.scheduled_time} · ${m.player1 || '-'} vs ${m.player2 || '-'}</span>
-        <span class="score">${m.court ? m.court + '코트' : ''}</span>
-      </div>`).join("");
-  }
+  const byCourt = {};
+  withCourt.forEach(m => { (byCourt[m.court] ||= []).push(m); });
+  courtBoard.innerHTML = Object.entries(byCourt).map(([court, ms]) => `
+    <div class="group-card">
+      <h3>${escapeHtml(court)}코트</h3>
+      ${ms.map(m => `
+        <div class="match-row">
+          <span>${escapeHtml(m.player1) || '?'} vs ${escapeHtml(m.player2) || '?'}</span>
+          <span class="score">${escapeHtml(m.scheduled_time || m.status)}</span>
+        </div>`).join("")}
+    </div>`).join("");
 }
 
 loadDraw();
+
+// 진행중 매치의 실시간 분 카운트 - 매 30초마다 재계산
+function updateLiveTimers() {
+  document.querySelectorAll("[data-started-at]").forEach(el => {
+    const startedAt = el.getAttribute("data-started-at");
+    if (!startedAt) return;
+    const timerEl = el.querySelector(".live-timer");
+    if (!timerEl) return;
+    timerEl.textContent = elapsedMinutes(startedAt) + "분";
+  });
+}
+setInterval(updateLiveTimers, 30000);   // 30초마다
+// 페이지 활성화 복귀 시 즉시 갱신
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) updateLiveTimers();
+});
 </script>
 {% endblock %}

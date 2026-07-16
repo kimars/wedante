@@ -42,7 +42,7 @@
   {% for ic in icons %}
   <a class="icon-tile" href="{{ url_for('tournament_calendar') if ic.link_type == 'calendar' else (ic.link_url or '#') }}"
      {% if ic.link_type == 'external' %}target="_blank" rel="noopener"{% endif %}
-     style="animation-delay:{{ loop.index0 * 0.04 }}s;--icon-size:{{ ic.icon_size or 64 }}px;">
+     style="animation-delay:{{ loop.index0 * 0.04 }}s;--icon-w:{{ ic.icon_width or ic.icon_size or 64 }}px;--icon-h:{{ ic.icon_height or ic.icon_size or 64 }}px;">
     <span class="icon-tile-img">
       {% if ic.icon_url %}<img src="{{ ic.icon_url }}" alt="{{ ic.label }}">
       {% else %}<span class="icon-tile-fallback">{{ ic.label[0] }}</span>{% endif %}

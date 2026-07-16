@@ -42,14 +42,26 @@
   <button onclick="generateDraw()">예선 대진표 생성</button>
 </div>
 
-<h2>2. 참가 신청자 관리</h2>
+<h2>2. 참가 신청자 관리{% if t.format == 'doubles' %} <span style="font-size:14px;color:var(--ink-faint);">· 복식 팀 편성</span>{% endif %}</h2>
 <div class="card">
-  <p style="font-size:13px;color:var(--ink-soft);">선수가 대회 페이지에서 "참가 신청" 버튼을 누르면 여기에 표시됩니다. 입금을 확인하셨으면 "확정" 버튼을 눌러주세요.</p>
+  <p style="font-size:13px;color:var(--ink-soft);">
+    선수가 대회 페이지에서 "참가 신청" 버튼을 누르면 여기에 표시됩니다. 입금을 확인하셨으면 "확정" 버튼을 눌러주세요.
+    {% if t.format == 'doubles' %}<br><strong>복식 대회</strong>이므로 각 선수의 <strong>파트너</strong>를 지정해주세요. 파트너가 지정되어야 팀 단위로 대진이 만들어집니다.{% endif %}
+  </p>
   <div id="participant-list">
     {% for p in participants %}
-    <div class="card-row" style="border-bottom:1px solid var(--border);padding:8px 0;" id="participant-{{ p.id }}">
+    <div class="card-row" style="border-bottom:1px solid var(--border);padding:8px 0;flex-wrap:wrap;" id="participant-{{ p.id }}">
       <span>{{ p.user.name }} ({{ p.user.phone }}) · {{ p.applied_at.strftime('%m/%d %H:%M') }} 신청</span>
-      <span style="display:flex;align-items:center;gap:8px;">
+      <span style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        {% if t.format == 'doubles' %}
+        <select class="partner-select" data-pid="{{ p.id }}" onchange="setPartner({{ p.id }}, this.value)"
+                style="font-size:12px;padding:4px 6px;border:1px solid var(--border-strong);border-radius:6px;max-width:180px;">
+          <option value="">- 파트너 선택 -</option>
+          {% for pp in participants if pp.user_id != p.user_id %}
+          <option value="{{ pp.user_id }}" {% if p.partner_id == pp.user_id %}selected{% endif %}>{{ pp.user.name }}</option>
+          {% endfor %}
+        </select>
+        {% endif %}
         <span class="badge {% if p.status == '확정' %}live{% elif p.status == '대기' %}closed{% endif %}">{{ p.status }}</span>
         {% if p.status != '확정' %}<button class="secondary" onclick="confirmParticipant({{ p.id }})">확정 처리</button>{% endif %}
       </span>
@@ -87,6 +99,20 @@
   <div class="card-row">
     <span>이 대회에 접수된 환불 요청 {{ refund_requests|length }}건</span>
     <a class="btn secondary" href="{{ url_for('admin_refunds') }}">환불 관리에서 채팅으로 처리하기 →</a>
+  </div>
+</div>
+
+<h2>9. 예약 SMS 확인 <span style="font-size:14px;color:var(--ink-faint);">· 경기 시작 20분 前 자동 발송</span></h2>
+<div class="card">
+  <div class="card-row" style="margin-bottom:10px;">
+    <p style="font-size:13px;color:var(--ink-soft);margin:0;">대진표를 생성하면 각 매치의 20분 前 시각으로 자동 예약됩니다. 백그라운드 워커가 30초마다 발송합니다.</p>
+    <span style="display:flex;gap:8px;">
+      <button class="secondary" onclick="loadSmsSchedule()">🔄 예약 목록 새로고침</button>
+      <button class="secondary" style="background:#fff8e6;" onclick="dispatchSmsNow()">📤 지금 즉시 발송</button>
+    </span>
+  </div>
+  <div id="sms-schedule-list" style="max-height:280px;overflow:auto;font-size:12px;">
+    <p style="color:var(--ink-faint);margin:0;">"새로고침"을 눌러 확인하세요.</p>
   </div>
 </div>
 
@@ -135,6 +161,17 @@ socket.on("bracket_update", () => loadDraw());
 function escapeHtml(s) {
   return String(s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
 }
+function elapsedMinutes(iso) {
+  if (!iso) return 0;
+  return Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
+}
+// 진행중 매치의 분 카운트를 30초마다 갱신
+setInterval(() => {
+  document.querySelectorAll(".live-timer[data-started-at]").forEach(el => {
+    const s = el.getAttribute("data-started-at");
+    if (s) el.textContent = elapsedMinutes(s) + "분";
+  });
+}, 30000);
 
 // [4] 참가자 실시간 반영 - 관리자 대시보드가 새로고침 없이 바로 갱신됨
 socket.on("participant_update", (d) => {
@@ -264,6 +301,47 @@ function confirmParticipant(pid) {
   apiPost(`/api/participants/${pid}/confirm`)
     .then(() => toast("참가가 확정되었습니다.", "success"))
     .catch((err) => toast(err.message, "error"));
+}
+
+function setPartner(pid, partnerId) {
+  apiPost(`/api/participants/${pid}/partner`, {partner_id: partnerId ? parseInt(partnerId) : null})
+    .then(() => toast("파트너가 저장되었습니다.", "success"))
+    .catch(err => toast(err.message, "error"));
+}
+
+function loadSmsSchedule() {
+  fetch(`/api/tournaments/${TID}/sms/schedule`)
+    .then(r => r.json())
+    .then(d => {
+      const el = document.getElementById("sms-schedule-list");
+      if (!d.items || !d.items.length) {
+        el.innerHTML = '<p style="color:var(--ink-faint);margin:0;">예약된 SMS가 없습니다. 대진표를 생성하면 자동으로 예약됩니다.</p>';
+        return;
+      }
+      el.innerHTML = `<table style="width:100%;border-collapse:collapse;">
+        <thead><tr style="background:var(--surface);">
+          <th style="text-align:left;padding:6px;font-size:11px;">발송 시각 (KST)</th>
+          <th style="text-align:left;padding:6px;font-size:11px;">전화번호</th>
+          <th style="text-align:left;padding:6px;font-size:11px;">상태</th>
+          <th style="text-align:left;padding:6px;font-size:11px;">결과</th>
+        </tr></thead>
+        <tbody>${d.items.map(s => `
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:6px;font-family:var(--font-mono);">${escapeHtml(s.send_at_kst || '-')}</td>
+            <td style="padding:6px;">${escapeHtml(s.phone)}</td>
+            <td style="padding:6px;">${s.sent ? '<span style="color:#10b981;">✓ 발송됨</span>' : '<span style="color:var(--ink-soft);">⏳ 대기</span>'}</td>
+            <td style="padding:6px;color:var(--ink-faint);font-size:11px;">${escapeHtml((s.result || '').substring(0, 60))}</td>
+          </tr>`).join("")}</tbody>
+      </table>`;
+    })
+    .catch(err => toast(err.message, "error"));
+}
+
+function dispatchSmsNow() {
+  if (!confirm("지금 즉시 만기된 예약 SMS를 발송합니다. 계속하시겠습니까?")) return;
+  apiPost(`/api/tournaments/${TID}/sms/dispatch-now`, {})
+    .then(d => { toast(`${d.dispatched}건의 SMS 발송 시도 완료`, "success"); loadSmsSchedule(); })
+    .catch(err => toast(err.message, "error"));
 }
 
 function generateDraw() {
@@ -435,29 +513,56 @@ function renderPrelimAdmin(matches) {
   const groups = {};
   matches.forEach(m => { (groups[m.group_no] ||= []).push(m); });
   const el = document.getElementById("prelim-admin-list");
-  el.innerHTML = Object.entries(groups).map(([gno, ms]) => `
+  const gnos = Object.keys(groups).map(Number).sort((a,b)=>a-b);
+  if (gnos.length === 0) {
+    el.innerHTML = "<p>예선 대진표가 아직 생성되지 않았습니다.</p>";
+    return;
+  }
+  el.innerHTML = gnos.map(gno => {
+    const ms = groups[gno].sort((a,b) => (a.seq_in_group||0) - (b.seq_in_group||0));
+    return `
     <div style="margin-bottom:14px;">
       <strong style="font-family:var(--font-mono);color:var(--primary);">${gno}조</strong>
-      ${ms.map(m => `
-        <div class="card-row" style="border-bottom:1px solid var(--border);padding:8px 0;flex-wrap:wrap;">
-          <span>${m.player1} vs ${m.player2}</span>
+      ${ms.map(m => {
+        const srcMatch = m.source_match_id ? ms.find(x=>x.id===m.source_match_id) : null;
+        const p1Label = m.player1 || (srcMatch ? `${srcMatch.seq_in_group}경기 ${m.source_role === 'winner' ? '승자' : '패자'}` : '?');
+        const p2Label = m.player2 || '?';
+        const bothSet = !!(m.player1_id && m.player2_id);
+        const seqLabel = m.seq_in_group ? `${m.seq_in_group}경기` : '';
+        const statusChip = m.status === '진행중'
+          ? `<span class="score-chip live">진행중 <span class="live-timer" data-started-at="${m.started_at || ''}">${m.started_at ? elapsedMinutes(m.started_at) : 0}분</span></span>`
+          : (m.status === '종료' ? '<span class="score-chip done">종료</span>' : '<span class="score-chip">시작전</span>');
+        return `
+        <div class="card-row" style="border-bottom:1px solid var(--border);padding:8px 0;flex-wrap:wrap;${bothSet ? '' : 'opacity:.7;'}">
+          <span><strong style="color:var(--ink-faint);font-size:12px;">${seqLabel}</strong> · ${escapeHtml(p1Label)} vs ${escapeHtml(p2Label)}${statusChip}</span>
           <span style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
             <input placeholder="코트" id="pcourt-${m.id}" style="width:56px;padding:6px;border:1px solid var(--border-strong);border-radius:8px;" value="${m.court || ''}">
             <input placeholder="시간 09:00" id="ptime-${m.id}" style="width:78px;padding:6px;border:1px solid var(--border-strong);border-radius:8px;" value="${m.scheduled_time || ''}">
             <button class="secondary" style="padding:7px 10px;font-size:12px;" onclick="submitSchedule(${m.id}, 'p')">배정</button>
-            <input placeholder="6-3,6-4" id="pscore-${m.id}" style="width:90px;padding:6px;border:1px solid var(--border-strong);border-radius:8px;" value="${m.score || ''}">
-            <button class="secondary" onclick="submitPrelimScore(${m.id}, ${m.player1_id})">${m.player1} 승</button>
-            <button class="secondary" onclick="submitPrelimScore(${m.id}, ${m.player2_id})">${m.player2} 승</button>
+            ${bothSet && m.status !== '종료' && m.status !== '진행중' ? `<button class="secondary" style="padding:7px 10px;font-size:12px;background:#fff8e6;" onclick="startMatch(${m.id})">▶ 시작</button>` : ''}
+            ${bothSet ? `
+              <input placeholder="6-3,6-4" id="pscore-${m.id}" style="width:90px;padding:6px;border:1px solid var(--border-strong);border-radius:8px;" value="${m.score || ''}">
+              <button class="secondary" onclick="submitPrelimScore(${m.id}, ${m.player1_id})">${escapeHtml(m.player1)} 승</button>
+              <button class="secondary" onclick="submitPrelimScore(${m.id}, ${m.player2_id})">${escapeHtml(m.player2)} 승</button>
+            ` : ''}
           </span>
-        </div>`).join("")}
-    </div>`).join("") || "<p>예선 대진표가 아직 생성되지 않았습니다.</p>";
+        </div>`;
+      }).join("")}
+    </div>`;
+  }).join("");
+}
+
+function startMatch(mid) {
+  apiPost(`/api/matches/${mid}/start`, {})
+    .then(() => toast("경기 시작. 20분 뒤 다음 조원에게 자동 문자가 발송됩니다.", "success"))
+    .catch(err => toast(err.message, "error"));
 }
 
 function submitSchedule(mid, prefix) {
   const court = document.getElementById(`${prefix}court-${mid}`).value;
   const time = document.getElementById(`${prefix}time-${mid}`).value;
   apiPost(`/api/matches/${mid}/schedule`, {court, scheduled_time: time})
-    .then(() => { toast("코트/시간이 배정되었습니다.", "success"); loadDraw(); })
+    .then(() => toast("코트/시간이 배정되었습니다.", "success"))
     .catch((err) => toast(err.message, "error"));
 }
 
@@ -465,7 +570,7 @@ function submitPrelimScore(mid, winnerId) {
   if (!winnerId) { toast("아직 상대가 정해지지 않은 경기입니다.", "error"); return; }
   const score = document.getElementById(`pscore-${mid}`).value;
   apiPost(`/api/matches/${mid}/score`, {winner_id: winnerId, score})
-    .then(() => { toast("경기 결과가 저장되었습니다.", "success"); loadDraw(); })
+    .then(() => toast("경기 결과 저장. 다음 경기 대진에 자동 반영됩니다.", "success"))
     .catch((err) => toast(err.message, "error"));
 }
 

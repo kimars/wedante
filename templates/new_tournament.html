@@ -6,8 +6,23 @@
   <div class="field"><label>대회명</label><input name="title" required></div>
   <div class="field"><label>장소</label><input name="location"></div>
   <div class="field"><label>날짜</label><input name="event_date" type="date" value="{{ prefill_date }}"></div>
+  <div class="field">
+    <label>종목</label>
+    <select name="format" required>
+      <option value="singles" selected>단식 (Singles) - 선수 1명 = 1팀</option>
+      <option value="doubles">복식 (Doubles) - 선수 2명 = 1팀</option>
+    </select>
+  </div>
+  <div class="card-row" style="gap:12px;">
+    <div class="field" style="flex:1;"><label>첫 경기 시작 시각</label><input name="start_time" placeholder="09:00" value="09:00"></div>
+    <div class="field" style="flex:1;"><label>경기 간격 (분)</label><input name="match_interval_min" type="number" value="30" min="10" max="120"></div>
+  </div>
+  <div class="field">
+    <label>예선 조 인원 (또는 조당 팀 수)</label>
+    <input name="group_size" type="number" value="3" min="2" max="8">
+    <p style="font-size:12px;color:var(--ink-faint);margin:4px 0 0;">기본 3명(또는 3팀). 1코트에 2조씩 배정되어 코트당 총 6경기가 30분 간격으로 자동 편성됩니다.</p>
+  </div>
   <div class="field"><label>참가비 (원)</label><input name="entry_fee" type="number" value="0"></div>
-  <div class="field"><label>예선 조 인원</label><input name="group_size" type="number" value="3"></div>
   <div class="field"><label>주차등록 링크 (선택, 외부 주소)</label><input name="parking_url" placeholder="https://..."></div>
   <div class="card-row">
     <div class="field" style="flex:1;"><label>입금 은행</label><input name="deposit_bank" placeholder="국민은행"></div>
