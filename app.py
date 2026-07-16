@@ -68,6 +68,7 @@ def _apply_lightweight_migrations():
         ("matches", "source_role", "VARCHAR(10)"),
         ("matches", "player1_partner_id", "INTEGER"),
         ("matches", "player2_partner_id", "INTEGER"),
+        ("sms_logs", "created_at", "TIMESTAMP"),
     ]
     try:
         insp = sqla_inspect(db.engine)
@@ -357,9 +358,17 @@ def _dispatch_due_sms(limit: int = 50) -> int:
     return len(due)
 
 
+# SMS 발송 워커의 마지막 하트비트 (진단용)
+_sms_worker_last_beat = None
+_sms_worker_started = False
+
+
 def _start_sms_dispatcher():
     """eventlet 워커 안에서 백그라운드 SMS 발송 루프를 시작한다.
     30초마다 만기된 예약을 확인하고 발송. 워커 재시작해도 DB 예약이 살아있어 재개된다."""
+    global _sms_worker_started
+    if _sms_worker_started:
+        return
     try:
         import eventlet
     except ImportError:
@@ -367,15 +376,154 @@ def _start_sms_dispatcher():
         return
 
     def loop():
+        global _sms_worker_last_beat
         while True:
             try:
-                eventlet.sleep(30)
+                _sms_worker_last_beat = datetime.utcnow()
                 with app.app_context():
                     _dispatch_due_sms()
             except Exception:
                 app.logger.exception("SMS dispatcher loop error")
+            eventlet.sleep(30)
+
     eventlet.spawn(loop)
+    _sms_worker_started = True
     app.logger.info("SMS dispatcher started (30s polling)")
+
+
+@app.route("/api/admin/sms/diagnose", methods=["GET"])
+@login_required
+def api_sms_diagnose():
+    """관리자 SMS 발송 진단.
+    - 환경변수 세팅 여부 (값은 마스킹)
+    - 백그라운드 워커 상태
+    - 최근 발송 로그
+    - 대기 중인 예약 개수"""
+    if not current_user.is_admin:
+        abort(403)
+
+    api_key = os.environ.get("SOLAPI_API_KEY", "")
+    api_secret = os.environ.get("SOLAPI_API_SECRET", "")
+    sender = os.environ.get("SOLAPI_SENDER", "")
+
+    def _mask(v):
+        if not v:
+            return None
+        if len(v) <= 6:
+            return v[0] + "***"
+        return v[:4] + "***" + v[-2:]
+
+    # 워커 하트비트 (마지막으로 살아있었던 시각)
+    worker_status = "not_started"
+    worker_last_beat_sec_ago = None
+    if _sms_worker_started:
+        if _sms_worker_last_beat:
+            elapsed = (datetime.utcnow() - _sms_worker_last_beat).total_seconds()
+            worker_last_beat_sec_ago = int(elapsed)
+            worker_status = "alive" if elapsed < 90 else "stalled"
+        else:
+            worker_status = "starting"
+
+    # 최근 SMS 로그 10건
+    logs = SmsLog.query.order_by(SmsLog.created_at.desc()).limit(10).all()
+    recent_logs = [{
+        "id": s.id,
+        "created_at": s.created_at.strftime("%Y-%m-%d %H:%M:%S") if s.created_at else None,
+        "message": (s.message or "")[:80],
+        "success": s.success,
+        "response": (s.provider_response or "")[:200],
+    } for s in logs]
+
+    # 예약 통계
+    pending = ScheduledSms.query.filter_by(sent=False).count()
+    sent = ScheduledSms.query.filter_by(sent=True).count()
+    # 다음 발송 예정 시각
+    next_scheduled = (ScheduledSms.query
+                      .filter_by(sent=False)
+                      .order_by(ScheduledSms.send_at).first())
+
+    return jsonify({
+        "solapi": {
+            "api_key_set": bool(api_key),
+            "api_key_masked": _mask(api_key),
+            "api_secret_set": bool(api_secret),
+            "api_secret_masked": _mask(api_secret),
+            "sender": sender or None,
+            "sender_valid_format": bool(sender and sender.replace("-", "").isdigit() and len(sender.replace("-", "")) in (10, 11)),
+            "all_set": bool(api_key and api_secret and sender),
+        },
+        "worker": {
+            "started": _sms_worker_started,
+            "status": worker_status,
+            "last_heartbeat_sec_ago": worker_last_beat_sec_ago,
+        },
+        "scheduled": {
+            "pending": pending,
+            "sent": sent,
+            "next_send_at_utc": next_scheduled.send_at.isoformat() if next_scheduled else None,
+            "next_send_at_kst": (
+                next_scheduled.send_at.replace(tzinfo=timezone.utc).astimezone(KST).strftime("%Y-%m-%d %H:%M")
+                if next_scheduled else None
+            ),
+        },
+        "recent_logs": recent_logs,
+        "server_now_utc": datetime.utcnow().isoformat(),
+        "server_now_kst": datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"),
+    })
+
+
+@app.route("/api/admin/sms/test", methods=["POST"])
+@login_required
+def api_sms_test():
+    """관리자가 즉시 테스트 문자를 특정 번호로 발송해본다.
+    실제 SOLAPI API 응답을 그대로 반환하므로 원인 파악에 사용."""
+    if not current_user.is_admin:
+        abort(403)
+    phone = ((request.json or {}).get("phone") or "").strip()
+    if not phone:
+        return jsonify({"error": "전화번호를 입력해주세요."}), 400
+    message = (request.json or {}).get("message") or f"[위단테] 테스트 문자입니다. ({datetime.now(KST).strftime('%H:%M:%S')})"
+    r = send_sms(phone, message)
+    # 로그도 남김
+    db.session.add(SmsLog(
+        tournament_id=None, user_id=current_user.id, message=message,
+        success=bool(r.get("success")), provider_response=str(r.get("raw"))[:500]
+    ))
+    db.session.commit()
+    return jsonify({
+        "success": r.get("success"),
+        "raw": r.get("raw"),
+        "hint": _sms_error_hint(r),
+    })
+
+
+def _sms_error_hint(r):
+    """SOLAPI 응답으로부터 원인 진단 힌트를 만든다. dev-mode 는 success=True 지만
+    실제 발송 안 됐으므로 먼저 감지해서 별도 안내."""
+    raw = r.get("raw")
+    s = str(raw) if raw else ""
+    if "dev-mode" in s:
+        return "❗ Railway Variables에 SOLAPI_API_KEY / SOLAPI_API_SECRET / SOLAPI_SENDER 세 개를 등록하세요. 지금은 콘솔 로그만 되고 실제 발송이 안 됩니다."
+    if r.get("success"):
+        return "✅ SOLAPI 접수 성공 (실제 도달 안 되면 수신 번호가 잘못됐거나 통신사 스팸 필터에 걸린 것)"
+    if "4013" in s:
+        return "❗ statusCode 4013 = 발신번호 미등록. solapi 콘솔에서 발신번호 사전등록을 완료해야 합니다."
+    if "1004" in s or "1005" in s:
+        return "❗ API Key/Secret이 잘못됐거나 만료됐습니다. solapi 콘솔에서 재발급하세요."
+    if "1015" in s or "잔액" in s or "balance" in s.lower():
+        return "❗ 잔액 부족. solapi 콘솔에서 문자 충전이 필요합니다."
+    if "network down" in s or "timeout" in s.lower():
+        return "❗ 네트워크 오류. Railway → solapi.com 접근이 차단됐는지 확인하세요."
+    return f"❗ 원인 미확인. solapi 문서(https://docs.solapi.com)에서 응답 코드 확인 필요: {s[:200]}"
+
+
+@app.route("/admin/sms")
+@login_required
+def admin_sms_diagnose_page():
+    """SMS 발송 진단 페이지. 관리자만 접근."""
+    if not current_user.is_admin:
+        abort(403)
+    return render_template("admin_sms.html")
 
 
 # 관리자용 즉시 발송 트리거 (테스트/수동 배포 확인용)
@@ -1792,6 +1940,220 @@ def init_db():
 
 
 import click
+
+@app.cli.command("seed-test")
+@click.option("--count", default=40, show_default=True, help="생성할 테스트 계정 수")
+@click.option("--format", "fmt", default="singles",
+              type=click.Choice(["singles", "doubles"]), show_default=True)
+@click.option("--auto-draw", is_flag=True, default=False,
+              help="자동으로 참가 신청 → 확정 → 예선 대진표까지 생성")
+@click.option("--start-time", default=None,
+              help="대회 시작 시각 HH:MM. 미지정 시 오늘로부터 30분 뒤로 자동 설정(SMS 예약 실동작 확인용)")
+@click.option("--event-date", default=None, help="대회 날짜 YYYY-MM-DD. 미지정 시 오늘")
+def seed_test(count, fmt, auto_draw, start_time, event_date):
+    """테스트용 계정과 대회를 한 번에 만든다.
+
+    실행: flask --app app seed-test --count 40 --format singles --auto-draw
+
+    생성물:
+    - 테스트 최고관리자: 01099990001 / test1234
+    - 테스트 관리자(대회 소유자): 01099990002 / test1234
+    - 테스트 선수 계정: 01099990003 ~ 01099990{2+count} / 비밀번호 모두 test1234
+    - 대회 하나 (기본: 오늘 날짜, 30분 후 시작)
+    - --auto-draw 시 참가 신청 → 확정 → 예선 대진표까지 자동 생성
+    """
+    from datetime import datetime as _dt, timedelta as _td
+
+    KOREAN_NAMES = [
+        "김민수", "이지훈", "박서준", "정예린", "최우진", "장서연", "윤도현", "임지우",
+        "한소율", "송지호", "고은서", "노주원", "홍지민", "안유진", "문시우", "양하은",
+        "손민재", "배지훈", "조서윤", "이도윤", "권지안", "황은재", "차준서", "오하윤",
+        "구태현", "허유진", "남주완", "심다인", "표승우", "우재원", "설아린", "육민준",
+        "인채원", "석윤호", "천서희", "국진혁", "여수아", "탁현우", "명나윤", "복지원",
+        "선혜린", "종민찬", "환예은", "형지훈", "옥나연",
+    ]
+
+    # 1. 위단테 organizer 확보
+    org = Organizer.query.filter_by(slug="wedante").first()
+    if not org:
+        org = Organizer(name="위단테", slug="wedante", contact_phone="010-6890-9123")
+        db.session.add(org); db.session.commit()
+
+    # 2. 테스트 최고관리자
+    superadmin = User.query.filter_by(phone="01099990001").first()
+    if not superadmin:
+        superadmin = User(name="테스트최고관리자", phone="01099990001", organizer_id=org.id,
+                           is_admin=True, is_superadmin=True, can_create_tournament=True,
+                           phone_verified=True)
+        superadmin.set_password("test1234")
+        db.session.add(superadmin); db.session.commit()
+
+    # 3. 테스트 대회 관리자
+    creator = User.query.filter_by(phone="01099990002").first()
+    if not creator:
+        creator = User(name="테스트관리자", phone="01099990002", organizer_id=org.id,
+                        is_admin=True, is_superadmin=False, can_create_tournament=True,
+                        phone_verified=True)
+        creator.set_password("test1234")
+        db.session.add(creator); db.session.commit()
+
+    # 4. 테스트 선수 계정 count 명
+    created = 0
+    players = []
+    for i in range(count):
+        phone = f"010999900{i+3:02d}" if i + 3 < 100 else f"01099990{i+3:03d}"
+        u = User.query.filter_by(phone=phone).first()
+        if not u:
+            name = KOREAN_NAMES[i % len(KOREAN_NAMES)] + (str(i//len(KOREAN_NAMES)+1) if i >= len(KOREAN_NAMES) else "")
+            u = User(name=name, phone=phone, organizer_id=org.id,
+                     region="서울" if i % 3 == 0 else ("대구" if i % 3 == 1 else "부산"),
+                     club=f"테스트클럽{(i%5)+1}",
+                     phone_verified=True)
+            u.set_password("test1234")
+            db.session.add(u)
+            created += 1
+        players.append(phone)
+    db.session.commit()
+
+    # 5. 대회 하나 만들기
+    now = _dt.now(KST)
+    if not event_date:
+        event_date = now.strftime("%Y-%m-%d")
+    if not start_time:
+        # 지금으로부터 30분 뒤 시각 (SMS는 10분 뒤에 발송 시작)
+        target = now + _td(minutes=30)
+        # 30분 단위로 반올림 (:00 또는 :30)
+        minute = 30 if target.minute >= 30 else 0
+        target = target.replace(minute=minute, second=0, microsecond=0)
+        if minute == 0 and target.minute == 0 and target < now + _td(minutes=25):
+            target += _td(hours=1)
+        start_time = target.strftime("%H:%M")
+
+    title = f"테스트 대회 ({now.strftime('%m/%d %H:%M')} 생성)"
+    t = Tournament(
+        organizer_id=org.id, title=title,
+        location="테스트 코트", event_date=event_date,
+        entry_fee=0,                   # 무료 (즉시 확정 처리 위해)
+        format=fmt, group_size=3,
+        start_time=start_time, match_interval_min=30,
+        status="접수중",
+        created_by_id=creator.id,
+    )
+    db.session.add(t); db.session.commit()
+
+    click.echo(f"\n{'='*60}")
+    click.echo("✅ 테스트 데이터 생성 완료")
+    click.echo(f"{'='*60}")
+    click.echo(f"신규 사용자: {created}명 (기존 계정은 유지)")
+    click.echo(f"전체 테스트 계정: {count}명")
+    click.echo(f"")
+    click.echo(f"🔑 로그인 정보 (비밀번호는 모두 test1234)")
+    click.echo(f"  - 최고 관리자: 01099990001 / test1234")
+    click.echo(f"  - 대회 관리자: 01099990002 / test1234")
+    click.echo(f"  - 선수 1번:   01099990003 / test1234")
+    click.echo(f"  - 선수 2번:   01099990004 / test1234")
+    click.echo(f"  - ...")
+    click.echo(f"  - 선수 {count}번: 010999900{count+2:02d} / test1234")
+    click.echo(f"")
+    click.echo(f"🏆 생성된 대회: {title}")
+    click.echo(f"  - 대회 ID:    {t.id}")
+    click.echo(f"  - 종목:       {'단식' if fmt == 'singles' else '복식'}")
+    click.echo(f"  - 날짜:       {event_date}")
+    click.echo(f"  - 첫 경기:    {start_time}")
+    click.echo(f"  - 상태:       {t.status}")
+    click.echo(f"  - URL:        /tournament/{t.id}")
+
+    # 6. --auto-draw 옵션: 자동으로 신청 + 확정 + 예선 생성
+    if auto_draw:
+        click.echo(f"\n[auto-draw] 참가 신청 자동 처리...")
+        # 참가비 0원이므로 즉시 확정 상태로 등록
+        applied = 0
+        applied_users = []
+        for phone in players:
+            u = User.query.filter_by(phone=phone).first()
+            if not u:
+                continue
+            if TournamentParticipant.query.filter_by(
+                tournament_id=t.id, user_id=u.id
+            ).first():
+                continue
+            p = TournamentParticipant(
+                tournament_id=t.id, user_id=u.id, status="확정",
+                confirmed_at=datetime.utcnow()
+            )
+            db.session.add(p)
+            applied += 1
+            applied_users.append(u)
+        db.session.commit()
+        click.echo(f"  ✓ {applied}명 신청+확정 처리")
+
+        # 복식이면 자동 페어링
+        if fmt == "doubles":
+            parts = TournamentParticipant.query.filter_by(tournament_id=t.id).order_by(TournamentParticipant.id).all()
+            # 2명씩 짝지음
+            for i in range(0, len(parts) - 1, 2):
+                parts[i].partner_id = parts[i+1].user_id
+                parts[i+1].partner_id = parts[i].user_id
+            db.session.commit()
+            click.echo(f"  ✓ 복식 팀 자동 페어링 ({len(parts)//2}팀)")
+            # 예선용 팀 대표 목록
+            team_leads = [parts[i].user_id for i in range(0, len(parts) - 1, 2)]
+            player_ids_for_draw = team_leads
+        else:
+            player_ids_for_draw = [u.id for u in applied_users]
+
+        # 예선 대진표 생성
+        click.echo(f"  ⏳ 예선 대진표 생성 중...")
+        generate_prelim_groups(t, player_ids_for_draw)
+
+        prelim_count = Match.query.filter_by(tournament_id=t.id, stage="prelim").count()
+        court_count = len(set(m.court for m in Match.query.filter_by(tournament_id=t.id, stage="prelim").all() if m.court))
+        sms_count = ScheduledSms.query.filter_by(tournament_id=t.id, sent=False).count()
+
+        click.echo(f"  ✓ 예선 매치 {prelim_count}건, 코트 {court_count}개, SMS 예약 {sms_count}건")
+        click.echo(f"\n대회 상태를 '진행중'으로 변경합니다...")
+        t.status = "진행중"
+        db.session.commit()
+
+    click.echo(f"\n{'='*60}")
+    click.echo(f"👉 홈에서 확인: /tournament/{t.id}")
+    click.echo(f"👉 관리 대시보드: /admin/tournament/{t.id}")
+    click.echo(f"{'='*60}\n")
+
+
+@app.cli.command("clear-test")
+@click.option("--yes", is_flag=True, default=False, help="확인 프롬프트 건너뛰기")
+def clear_test(yes):
+    """seed-test 로 만든 테스트 계정만 삭제한다.
+    전화번호 010-9999-00** 로 시작하는 계정과 그들이 만든 대회를 정리."""
+    test_users = User.query.filter(User.phone.like("01099990%")).all()
+    test_ids = [u.id for u in test_users]
+    if not test_ids:
+        click.echo("삭제할 테스트 계정이 없습니다.")
+        return
+    click.echo(f"삭제 대상: 사용자 {len(test_ids)}명 + 관련 대회/참가/매치/문자 로그")
+    if not yes:
+        click.confirm("계속할까요?", abort=True)
+    # 이 사용자들이 만든 대회
+    t_ids = [t.id for t in Tournament.query.filter(Tournament.created_by_id.in_(test_ids)).all()]
+    if t_ids:
+        m_ids = [m.id for m in Match.query.filter(Match.tournament_id.in_(t_ids)).all()]
+        if m_ids:
+            CallLog.query.filter(CallLog.match_id.in_(m_ids)).update({"match_id": None}, synchronize_session=False)
+        ScheduledSms.query.filter(ScheduledSms.tournament_id.in_(t_ids)).delete(synchronize_session=False)
+        RefundMessage.query.filter(RefundMessage.refund_request_id.in_([r.id for r in RefundRequest.query.filter(RefundRequest.tournament_id.in_(t_ids)).all()])).delete(synchronize_session=False)
+        RefundRequest.query.filter(RefundRequest.tournament_id.in_(t_ids)).delete(synchronize_session=False)
+        TournamentParticipant.query.filter(TournamentParticipant.tournament_id.in_(t_ids)).delete(synchronize_session=False)
+        CallLog.query.filter(CallLog.tournament_id.in_(t_ids)).delete(synchronize_session=False)
+        SmsLog.query.filter(SmsLog.tournament_id.in_(t_ids)).delete(synchronize_session=False)
+        Match.query.filter(Match.tournament_id.in_(t_ids)).delete(synchronize_session=False)
+        Tournament.query.filter(Tournament.id.in_(t_ids)).delete(synchronize_session=False)
+    # 참가/파트너 관계도 정리
+    TournamentParticipant.query.filter(TournamentParticipant.user_id.in_(test_ids)).delete(synchronize_session=False)
+    User.query.filter(User.id.in_(test_ids)).delete(synchronize_session=False)
+    db.session.commit()
+    click.echo(f"✓ 테스트 데이터 정리 완료")
+
 
 @app.cli.command("reset-data")
 @click.option("--keep-banners", is_flag=True, default=False,

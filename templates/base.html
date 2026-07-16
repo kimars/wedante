@@ -45,6 +45,7 @@
           {% endif %}
           {% if current_user.is_admin %}
           <a href="{{ url_for('admin_refunds') }}">💬 환불 관리</a>
+          <a href="{{ url_for('admin_sms_diagnose_page') }}">📱 SMS 발송 진단</a>
           {% endif %}
           {% if current_user.is_superadmin %}
           <div class="nav-menu-divider"></div>

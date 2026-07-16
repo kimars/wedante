@@ -238,10 +238,11 @@ class CallReply(db.Model):
 class SmsLog(db.Model):
     __tablename__ = "sms_logs"
     id = db.Column(db.Integer, primary_key=True)
-    tournament_id = db.Column(db.Integer, db.ForeignKey("tournaments.id"), nullable=False)
-    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    tournament_id = db.Column(db.Integer, db.ForeignKey("tournaments.id"), nullable=True, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     message = db.Column(db.Text)
     sent_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
     success = db.Column(db.Boolean, default=False)
     provider_response = db.Column(db.Text)
 
