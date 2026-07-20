@@ -30,6 +30,9 @@
   </a>
   <nav>
     <a href="{{ url_for('tournament_calendar') }}">대회 캘린더</a>
+    {% if current_user.is_authenticated and not current_user.is_admin %}
+    <a href="{{ url_for('analyze_opponent_page') }}" title="상대선수 분석">🎯 상대분석</a>
+    {% endif %}
     {% if current_user.is_authenticated %}
       <a class="nav-me" href="{{ url_for('profile') }}" title="내 정보">
         <span class="nav-user-chip">{{ current_user.name[0] }}</span>

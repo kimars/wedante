@@ -10,7 +10,7 @@ from flask_login import (LoginManager, login_user, logout_user, login_required,
                           current_user, UserMixin)
 from flask_socketio import SocketIO, emit, join_room
 from sqlalchemy.orm import joinedload
-from sqlalchemy import inspect as sqla_inspect, text
+from sqlalchemy import inspect as sqla_inspect, text, func
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 
@@ -49,12 +49,18 @@ def _apply_lightweight_migrations():
     columns_to_add = [
         ("users", "can_create_tournament", "BOOLEAN DEFAULT FALSE"),
         ("users", "phone_verified", "BOOLEAN DEFAULT FALSE"),
+        ("users", "handedness", "VARCHAR(10)"),
+        ("users", "strengths", "TEXT"),
+        ("users", "weaknesses", "TEXT"),
+        ("users", "playstyle_public", "BOOLEAN DEFAULT TRUE"),
         ("tournaments", "created_by_id", "INTEGER"),
         ("tournaments", "winner_id", "INTEGER"),
         ("tournaments", "winner_pair", "VARCHAR(120)"),
         ("tournaments", "format", "VARCHAR(10) DEFAULT 'singles'"),
         ("tournaments", "start_time", "VARCHAR(10) DEFAULT '09:00'"),
         ("tournaments", "match_interval_min", "INTEGER DEFAULT 30"),
+        ("tournaments", "groups_per_court", "INTEGER DEFAULT 2"),
+        ("tournaments", "main_bracket_frame", "TEXT"),
         ("tournament_participants", "partner_id", "INTEGER"),
         ("call_logs", "message", "TEXT"),
         ("quick_icons", "icon_size", "INTEGER DEFAULT 64"),
@@ -163,15 +169,17 @@ def next_power_of_two(n):
     return 1 if n <= 1 else 2 ** math.ceil(math.log2(n))
 
 
-def build_main_bracket(tournament_id, slot_count):
-    """빈 본선 토너먼트 트리를 생성하고 각 라운드를 next_match_id로 연결한다.
-    반환값: 1라운드 매치 리스트 (조 우승자가 채워질 슬롯)
-    조가 1개뿐이어도(=참가자가 적어 그룹이 하나만 만들어져도) 최소 2슬롯(결승 1경기)은
-    항상 만들어서 첫 조 슬롯 배정 시 인덱스 에러가 나지 않게 한다."""
-    size = next_power_of_two(max(slot_count, 2))
+def build_main_bracket(tournament_id, groups_count, qualifiers_per_group=2):
+    """예선 각 조에서 qualifiers_per_group 명(팀)이 본선 진출한다고 가정하고 본선 트리 생성.
+    - 총 진출자 = groups_count * qualifiers_per_group  (기본: 조당 2명 = 1위+2위)
+    - 본선 크기 = 진출자 수를 위로 반올림한 2의 거듭제곱 (부전승 슬롯 자동 발생)
+    - 라운드 이름: 64강/32강/16강/8강/준결승/결승 등 크기에 따라 자동
+    반환값: 1라운드 매치 리스트"""
+    total_qualifiers = max(groups_count * qualifiers_per_group, 2)
+    size = next_power_of_two(total_qualifiers)
     round_names = ROUND_NAMES_BY_SIZE.get(size, [f"{size}강"] + ["결승"])
 
-    rounds = []  # rounds[i] = list[Match] for round i
+    rounds = []
     num_matches_this_round = size // 2
     for r_idx, rname in enumerate(round_names):
         round_matches = []
@@ -182,51 +190,100 @@ def build_main_bracket(tournament_id, slot_count):
             round_matches.append(match)
         rounds.append(round_matches)
         num_matches_this_round //= 2
-    db.session.flush()  # ids 확정
+    db.session.flush()
 
-    # 라운드끼리 연결: rounds[r][i] 의 승자 -> rounds[r+1][i//2] 의 slot (i%2)+1
+    # 라운드끼리 연결
     for r in range(len(rounds) - 1):
         for i, match in enumerate(rounds[r]):
             nxt = rounds[r + 1][i // 2]
             match.next_match_id = nxt.id
             match.next_match_slot = (i % 2) + 1
     db.session.commit()
-    return rounds[0]  # 1라운드 = 조 우승자가 배정될 자리
+    return rounds[0]
 
 
 def _first_round_main_matches(tournament_id):
-    """본선 첫 라운드(가장 매치가 많은 라운드)의 매치들을 match_no 순으로 반환.
-    조 우승자를 넣을 슬롯을 찾기 위한 결정론적 계산에 사용."""
+    """본선 첫 라운드(가장 매치가 많은 라운드)의 매치들을 match_no 순으로 반환."""
     main = Match.query.filter_by(tournament_id=tournament_id, stage="main").all()
     if not main:
         return []
     by_round = {}
     for m in main:
         by_round.setdefault(m.round_name, []).append(m)
-    # 가장 매치가 많은 라운드 = 1라운드
     first = max(by_round.values(), key=len)
     return sorted(first, key=lambda m: m.match_no)
 
 
-def _set_group_winner_slot(tournament_id, group_no, winner_id):
-    """조 우승자를 본선 첫 라운드 매치의 해당 슬롯에 배치. commit/emit은 호출자 책임."""
+def _resolve_bracket_slot(tournament, group_no, rank, groups_count, first_round_size):
+    """조 g의 rank위(1|2)가 본선 첫 라운드에서 앉을 (match_index, slot) 반환.
+
+    우선순위:
+    1) tournament.main_bracket_frame 이 있으면 그걸 사용 (사용자 사전 정의)
+       - 형식: {"size": N, "slots": [{"match_no": 1, "slot": 1, "group_no": 5, "rank": 1}, ...]}
+       - "match_no"는 1-based, "slot"은 1 또는 2, "rank"는 1(조1위) 또는 2(조2위)
+       - 매칭되는 항목이 없으면 자동 계산 fallback
+    2) 자동 알고리즘: 조 g 1위 → 매치 g, 조 g 2위 → 매치 (g+1) slot2 (마지막 조는 첫 조와)"""
+    # 1) 사전 정의 프레임 우선
+    if tournament and tournament.main_bracket_frame:
+        try:
+            import json
+            frame = json.loads(tournament.main_bracket_frame)
+            for s in frame.get("slots", []):
+                if int(s.get("group_no") or 0) == group_no and int(s.get("rank") or 0) == rank:
+                    match_no = int(s["match_no"])
+                    slot = int(s["slot"])
+                    idx = match_no - 1
+                    if 0 <= idx < first_round_size and slot in (1, 2):
+                        return idx, slot
+        except (ValueError, KeyError, TypeError):
+            app.logger.exception("main_bracket_frame parse error - falling back to auto layout")
+    # 2) 자동 알고리즘 fallback
+    if rank == 1:
+        idx = group_no - 1
+    else:
+        idx = group_no % groups_count if groups_count else 0
+    slot = 1 if rank == 1 else 2
+    if first_round_size > 0 and idx >= first_round_size:
+        idx = idx % first_round_size
+    return idx, slot
+
+
+def _qualifier_slot(group_no, rank, groups_count, first_round_size):
+    """[하위호환] 프레임 없는 경우의 자동 계산. tournament 컨텍스트 없이 호출."""
+    return _resolve_bracket_slot(None, group_no, rank, groups_count, first_round_size)
+
+
+def _set_group_qualifier_slot(tournament_id, group_no, rank, user_id, partner_id=None,
+                                groups_count=None):
+    """조 rank위 선수를 본선 첫 라운드 해당 슬롯에 배치. commit/emit은 호출자 책임."""
     first_round = _first_round_main_matches(tournament_id)
     if not first_round:
         return
-    idx = (group_no - 1) // 2
-    slot = ((group_no - 1) % 2) + 1
+    tournament = Tournament.query.get(tournament_id)
+    if groups_count is None:
+        groups_count = (db.session.query(func.count(func.distinct(Match.group_no)))
+                        .filter(Match.tournament_id == tournament_id,
+                                Match.stage == "prelim").scalar()) or len(first_round)
+    idx, slot = _resolve_bracket_slot(tournament, group_no, rank, groups_count, len(first_round))
     if idx >= len(first_round):
         return
     slot_match = first_round[idx]
     if slot == 1:
-        slot_match.player1_id = winner_id
+        slot_match.player1_id = user_id
+        slot_match.player1_partner_id = partner_id
     else:
-        slot_match.player2_id = winner_id
+        slot_match.player2_id = user_id
+        slot_match.player2_partner_id = partner_id
+
+
+# 하위호환: 기존 코드가 _set_group_winner_slot 을 부르면 1위로 처리
+def _set_group_winner_slot(tournament_id, group_no, winner_id):
+    _set_group_qualifier_slot(tournament_id, group_no, 1, winner_id)
 
 
 def record_group_winner(tournament: Tournament, group_no: int, winner_id: int):
-    """조별 예선이 끝나고 주최자가 우승자를 확정하면, 본선 대진표 해당 슬롯에 자동 반영."""
-    _set_group_winner_slot(tournament.id, group_no, winner_id)
+    """[하위호환] 조 1위 자동 반영. 요즘은 _finalize_prelim_group 이 1위+2위 함께 배치."""
+    _set_group_qualifier_slot(tournament.id, group_no, 1, winner_id)
     db.session.commit()
     socketio.emit("bracket_update", {"tournament_id": tournament.id},
                    room=f"tournament_{tournament.id}")
@@ -234,28 +291,50 @@ def record_group_winner(tournament: Tournament, group_no: int, winner_id: int):
 
 def _assign_courts_and_schedule(tournament: Tournament, groups_count: int):
     """대회 예선 매치들에 코트와 시각을 자동 배정한다.
-    규칙:
-    - 코트 하나에 2개 조가 함께 배정 (총 6경기)
-    - 조1의 seq1(경기1) → 조2의 seq1(경기2) → 조1의 seq2(경기3) → 조2의 seq2(경기4) → 조1의 seq3(경기5) → 조2의 seq3(경기6) 순
-    - 시각은 tournament.start_time 부터 match_interval_min(기본 30분)씩 증가
-    호출자는 이후 db.session.commit() 해야 한다."""
+
+    tournament.groups_per_court 로 두 가지 프레임 선택:
+    - 2 (기본, 참가자 많을 때): 1코트에 2개 조 = 총 6경기 교차 진행
+      · 순서: A1, B1, A2, B2, A3, B3  (조1↔조2 번갈아, 한 조가 연속 경기 안 함)
+    - 1 (참가자 적을 때): 1코트에 1개 조 = 3경기만 진행
+      · 순서: A1, A2, A3
+
+    시각은 tournament.start_time 부터 match_interval_min(기본 30분)씩 증가."""
     from datetime import datetime, timedelta
 
     interval = tournament.match_interval_min or 30
+    gpc = tournament.groups_per_court or 2
     try:
         base = datetime.strptime(tournament.start_time or "09:00", "%H:%M")
     except ValueError:
         base = datetime.strptime("09:00", "%H:%M")
 
-    # 두 조씩 짝지어 하나의 코트에 배정
     court_no = 1
+    max_seq = 3   # 조당 최대 경기 수 (3경기 방식)
+
+    if gpc == 1:
+        # === 1코트 = 1조 프레임 (참가자 적을 때) ===
+        for group_no in range(1, groups_count + 1):
+            court_seq = 0
+            for si in range(1, max_seq + 1):
+                m = (Match.query
+                     .filter_by(tournament_id=tournament.id, stage="prelim",
+                                 group_no=group_no, seq_in_group=si)
+                     .first())
+                if not m:
+                    continue
+                court_seq += 1
+                m.court = str(court_no)
+                m.court_seq = court_seq
+                m.scheduled_time = (base + timedelta(minutes=interval * (court_seq - 1))).strftime("%H:%M")
+            court_no += 1
+        return
+
+    # === 1코트 = 2조 프레임 (기본, 참가자 많을 때) ===
     for pair_start in range(1, groups_count + 1, 2):
-        group_a = pair_start                      # 항상 존재
+        group_a = pair_start
         group_b = pair_start + 1 if pair_start + 1 <= groups_count else None
-        # 이 코트에서 진행될 총 매치 리스트를 seq_in_group 기준으로 만듦
-        # 코트 순서: A-1, B-1, A-2, B-2, A-3, B-3
         court_seq = 0
-        max_seq = 3   # 조당 최대 경기 수 (3경기 방식)
+        # A-B-A-B-A-B 순서 (조간 교차)
         for si in range(1, max_seq + 1):
             for g in (group_a, group_b):
                 if not g:
@@ -517,6 +596,12 @@ def _sms_error_hint(r):
     return f"❗ 원인 미확인. solapi 문서(https://docs.solapi.com)에서 응답 코드 확인 필요: {s[:200]}"
 
 
+@app.route("/game/tennis")
+def game_tennis():
+    """대회 대기 중 즐길 수 있는 테니스 미니 게임 (Pong 스타일)"""
+    return render_template("game_tennis.html")
+
+
 @app.route("/admin/sms")
 @login_required
 def admin_sms_diagnose_page():
@@ -537,6 +622,121 @@ def api_sms_dispatch_now(tid):
         abort(403)
     count = _dispatch_due_sms(limit=200)
     return jsonify({"ok": True, "dispatched": count})
+
+
+@app.route("/api/tournaments/<int:tid>/bracket-frame", methods=["GET"])
+@login_required
+def api_get_bracket_frame(tid):
+    """대회의 본선 사전 배치 프레임 조회. 없으면 null."""
+    t = Tournament.query.get_or_404(tid)
+    if not can_manage_tournament(current_user, t):
+        abort(403)
+    if not t.main_bracket_frame:
+        return jsonify({"frame": None})
+    try:
+        import json
+        return jsonify({"frame": json.loads(t.main_bracket_frame)})
+    except ValueError:
+        return jsonify({"frame": None, "error": "저장된 프레임이 손상됨"}), 200
+
+
+@app.route("/api/tournaments/<int:tid>/bracket-frame", methods=["POST"])
+@login_required
+def api_set_bracket_frame(tid):
+    """대회 본선 프레임 저장. body 예시:
+    {"size": 64, "slots": [
+        {"match_no": 1, "slot": 1, "group_no": 5, "rank": 1},
+        {"match_no": 1, "slot": 2, "group_no": null, "rank": null, "bye": true},
+        ...
+    ]}
+    match_no: 1-based, slot: 1|2, rank: 1(조1위)|2(조2위)"""
+    t = Tournament.query.get_or_404(tid)
+    if not can_manage_tournament(current_user, t):
+        abort(403)
+    import json
+    payload = request.json or {}
+    slots = payload.get("slots", [])
+    if not isinstance(slots, list):
+        return jsonify({"error": "slots는 배열이어야 합니다."}), 400
+    # 유효성 검사: 중복 슬롯, 중복 조/rank 쌍 확인
+    seen_slots = set()
+    seen_qualifiers = set()
+    for s in slots:
+        try:
+            match_no = int(s["match_no"]); slot = int(s["slot"])
+        except (KeyError, ValueError, TypeError):
+            return jsonify({"error": f"잘못된 slot 항목: {s}"}), 400
+        key = (match_no, slot)
+        if key in seen_slots:
+            return jsonify({"error": f"매치{match_no} slot{slot}이 중복됩니다."}), 400
+        seen_slots.add(key)
+        if not s.get("bye"):
+            try:
+                gno = int(s.get("group_no") or 0)
+                rk = int(s.get("rank") or 0)
+            except (ValueError, TypeError):
+                gno, rk = 0, 0
+            if gno and rk in (1, 2):
+                q = (gno, rk)
+                if q in seen_qualifiers:
+                    return jsonify({"error": f"{gno}조 {rk}위가 중복 배치됐습니다."}), 400
+                seen_qualifiers.add(q)
+    t.main_bracket_frame = json.dumps(payload, ensure_ascii=False)
+    db.session.commit()
+    return jsonify({"ok": True, "slot_count": len(slots)})
+
+
+@app.route("/api/tournaments/<int:tid>/bracket-frame/reapply", methods=["POST"])
+@login_required
+def api_reapply_bracket_frame(tid):
+    """이미 결정된 조 순위를 프레임 기준으로 재배치. 프레임 변경 후 호출."""
+    t = Tournament.query.get_or_404(tid)
+    if not can_manage_tournament(current_user, t):
+        abort(403)
+    # 각 조에 대해 finalize 재실행
+    group_nos = [g[0] for g in (db.session.query(Match.group_no)
+                                 .filter_by(tournament_id=tid, stage="prelim")
+                                 .distinct().all()) if g[0]]
+    reapplied = 0
+    for gno in group_nos:
+        if _finalize_prelim_group(tid, gno):
+            reapplied += 1
+    db.session.commit()
+    socketio.emit("bracket_update", {"tournament_id": tid},
+                   room=f"tournament_{tid}")
+    return jsonify({"ok": True, "reapplied_groups": reapplied})
+
+
+@app.route("/api/tournaments/<int:tid>/bracket-frame/default", methods=["GET"])
+@login_required
+def api_get_default_bracket_frame(tid):
+    """현재 알고리즘에 기반한 자동 프레임을 반환. 관리자가 참조/수정 시작점으로 사용."""
+    t = Tournament.query.get_or_404(tid)
+    if not can_manage_tournament(current_user, t):
+        abort(403)
+    groups_count = (db.session.query(func.count(func.distinct(Match.group_no)))
+                    .filter(Match.tournament_id == tid, Match.stage == "prelim").scalar()) or 0
+    first_round = _first_round_main_matches(tid)
+    if not first_round:
+        return jsonify({"error": "본선 대진표가 아직 없습니다."}), 400
+    size = next_power_of_two(max(groups_count * 2, 2))
+    slots = []
+    used = {(0, 0)}
+    for gno in range(1, groups_count + 1):
+        for rank in (1, 2):
+            idx, slot = _resolve_bracket_slot(None, gno, rank, groups_count, len(first_round))
+            slots.append({"match_no": idx + 1, "slot": slot, "group_no": gno, "rank": rank})
+            used.add((idx + 1, slot))
+    # 나머지는 BYE
+    for mn in range(1, len(first_round) + 1):
+        for sl in (1, 2):
+            if (mn, sl) not in used:
+                slots.append({"match_no": mn, "slot": sl, "group_no": None, "rank": None, "bye": True})
+    return jsonify({
+        "size": size,
+        "slots": slots,
+        "note": "이것은 자동 생성된 기본 프레임입니다. 사용자 정의 프레임으로 덮어쓰려면 이 형식대로 POST 하세요."
+    })
 
 
 @app.route("/api/tournaments/<int:tid>/sms/schedule", methods=["GET"])
@@ -714,6 +914,10 @@ def register():
         u = User(name=f["name"], phone=phone, region=f.get("region"),
                   club=f.get("club"), refund_bank=f.get("refund_bank"),
                   refund_account=f.get("refund_account"),
+                  handedness=f.get("handedness") or None,
+                  strengths=(f.get("strengths") or "").strip() or None,
+                  weaknesses=(f.get("weaknesses") or "").strip() or None,
+                  playstyle_public=bool(f.get("playstyle_public")),
                   phone_verified=True)
         u.set_password(f["password"])
         db.session.add(u)
@@ -808,6 +1012,16 @@ def profile_update():
     current_user.name = f.get("name") or current_user.name
     current_user.region = f.get("region") or current_user.region
     current_user.club = f.get("club") or current_user.club
+    # 선수 프로필 (분석용)
+    if "handedness" in f:
+        current_user.handedness = f.get("handedness") or None
+    if "strengths" in f:
+        current_user.strengths = (f.get("strengths") or "").strip() or None
+    if "weaknesses" in f:
+        current_user.weaknesses = (f.get("weaknesses") or "").strip() or None
+    # 체크박스는 명시적으로 처리 (체크 해제도 반영)
+    if "playstyle_form_submitted" in f:
+        current_user.playstyle_public = bool(f.get("playstyle_public"))
     if f.get("refund_bank"):
         current_user.refund_bank = f.get("refund_bank")
     if f.get("refund_account"):
@@ -1122,6 +1336,7 @@ def new_tournament():
             format=f.get("format") or "singles",
             start_time=f.get("start_time") or "09:00",
             match_interval_min=int(f.get("match_interval_min") or 30),
+            groups_per_court=int(f.get("groups_per_court") or 2),
             parking_url=f.get("parking_url") or None,
             deposit_bank=f.get("deposit_bank") or None,
             deposit_account=f.get("deposit_account") or None,
@@ -1285,30 +1500,82 @@ def _advance_prelim_winner_loser(m: Match):
 
 
 def _finalize_prelim_group(tournament_id: int, group_no: int):
-    """조 내 모든 경기 종료 시 조 우승자를 자동 결정하고 본선에 반영.
-    - 3경기 방식이면 seq=2 매치(승자결정전)의 승자가 조 우승자
-    - 라운드로빈이면 승수 최다자
-    - 2명이면 유일 매치의 승자"""
+    """조 내 모든 경기가 끝나면 조 1위, 2위를 자동 결정하여 본선 첫 라운드에 배치한다.
+    반환값: (winner_user_id, runner_up_user_id) 또는 None
+    - 순위 규칙: 승수 많은 순, 동률이면 그 둘의 직접 대결 승자가 위
+    - 조 1위, 2위 두 명(팀)이 본선 진출. 3위는 탈락.
+    """
     matches = (Match.query
                .filter_by(tournament_id=tournament_id, stage="prelim", group_no=group_no)
                .order_by(Match.seq_in_group.nulls_last()).all())
     if not matches or any(x.status != "종료" for x in matches):
         return None
-    # 3경기 방식: seq=2 매치(승자결정전) 승자가 조 우승자
-    if len(matches) == 3 and any(x.seq_in_group == 2 for x in matches):
-        m2 = next(x for x in matches if x.seq_in_group == 2)
-        return m2.winner_id
-    # 2명: 유일 매치의 승자
-    if len(matches) == 1:
-        return matches[0].winner_id
-    # 라운드로빈: 승수 최다자
-    wins = {}
+
+    # 조에 참가한 선수 목록 수집 (player1/player2 슬롯에서 나온 모든 user_id)
+    all_players = set()
     for m in matches:
-        if m.winner_id:
-            wins[m.winner_id] = wins.get(m.winner_id, 0) + 1
-    if not wins:
+        if m.player1_id: all_players.add(m.player1_id)
+        if m.player2_id: all_players.add(m.player2_id)
+    if not all_players:
         return None
-    return max(wins, key=wins.get)
+
+    # 승수 계산
+    wins = {pid: 0 for pid in all_players}
+    for m in matches:
+        if m.winner_id and m.winner_id in wins:
+            wins[m.winner_id] += 1
+
+    # 순위 결정: 승수 내림차순. 동률 시 그 둘의 상대전적으로 결정
+    def head_to_head(a, b):
+        """a가 b를 이긴 경기가 있으면 +1, 진 경기가 있으면 -1, 없으면 0"""
+        for m in matches:
+            if ((m.player1_id == a and m.player2_id == b) or
+                (m.player1_id == b and m.player2_id == a)):
+                if m.winner_id == a:
+                    return 1
+                if m.winner_id == b:
+                    return -1
+        return 0
+
+    # 파이썬 정렬은 비교 기반이 아니어서, 승수 그룹핑 후 그룹 내 상대전적으로 재정렬
+    ranked = sorted(all_players, key=lambda p: -wins[p])
+    # 동률 그룹별로 상대전적 정렬
+    from itertools import groupby
+    final_order = []
+    for _, grp in groupby(ranked, key=lambda p: wins[p]):
+        grp = list(grp)
+        if len(grp) > 1:
+            # 상대전적 tournament (간단히: 각 선수 대비 승수)
+            grp.sort(key=lambda p: -sum(1 for q in grp if q != p and head_to_head(p, q) > 0))
+        final_order.extend(grp)
+
+    # 파트너 정보 조회 (복식이면 함께 이동)
+    def partner_of(user_id):
+        for m in matches:
+            if m.player1_id == user_id:
+                return m.player1_partner_id
+            if m.player2_id == user_id:
+                return m.player2_partner_id
+        return None
+
+    # 조 개수 조회 (본선 슬롯 계산에 필요)
+    groups_count = (db.session.query(func.count(func.distinct(Match.group_no)))
+                    .filter(Match.tournament_id == tournament_id,
+                            Match.stage == "prelim").scalar()) or 1
+
+    winner_id = final_order[0] if len(final_order) >= 1 else None
+    runner_up_id = final_order[1] if len(final_order) >= 2 else None
+
+    if winner_id:
+        _set_group_qualifier_slot(tournament_id, group_no, 1, winner_id,
+                                   partner_id=partner_of(winner_id),
+                                   groups_count=groups_count)
+    if runner_up_id:
+        _set_group_qualifier_slot(tournament_id, group_no, 2, runner_up_id,
+                                   partner_id=partner_of(runner_up_id),
+                                   groups_count=groups_count)
+
+    return winner_id  # 하위호환: 기존 호출부는 조 1위 반환값을 기대
 
 
 def _schedule_next_match_notification(match: Match):
@@ -1363,10 +1630,8 @@ def api_submit_score(mid):
     elif m.stage == "prelim":
         # 다음 예선 경기(승자/패자 대기 매치)에 자동 배치
         _advance_prelim_winner_loser(m)
-        # 조 전체가 끝났으면 조 우승자를 본선 슬롯에 자동 반영
-        winner_id = _finalize_prelim_group(m.tournament_id, m.group_no)
-        if winner_id:
-            _set_group_winner_slot(m.tournament_id, m.group_no, winner_id)
+        # 조 전체가 끝났으면 조 1위 + 2위를 본선 슬롯에 자동 반영 (finalize 함수 안에서 배치)
+        _finalize_prelim_group(m.tournament_id, m.group_no)
         db.session.commit()
 
     socketio.emit("bracket_update", {"tournament_id": m.tournament_id},
@@ -2293,6 +2558,76 @@ def reset_data(keep_banners, yes):
         db.session.commit()
 
     click.echo("✓ 삭제 완료. 최고 관리자 계정만 남아있습니다.")
+
+
+@app.route("/analyze", methods=["GET"])
+@login_required
+def analyze_opponent_page():
+    """상대선수 분석 페이지 (검색 폼)."""
+    return render_template("analyze.html", result=None, query=None, opponent=None)
+
+
+@app.route("/api/analyze/search", methods=["GET"])
+@login_required
+def api_analyze_search():
+    """이름/전화번호 부분 일치로 분석 대상 선수 목록 조회 (자동완성용).
+    playstyle_public=True 인 사용자만 노출."""
+    q = (request.args.get("q") or "").strip()
+    if len(q) < 2:
+        return jsonify({"results": []})
+    from sqlalchemy import or_
+    users = (User.query
+             .filter(User.playstyle_public.is_(True))
+             .filter(User.id != current_user.id)  # 본인 제외
+             .filter(User.is_admin.is_(False))    # 관리자 계정 제외
+             .filter(or_(User.name.ilike(f"%{q}%"),
+                          User.phone.ilike(f"%{q}%")))
+             .limit(20).all())
+    return jsonify({
+        "results": [{
+            "id": u.id, "name": u.name,
+            "region": u.region or "", "club": u.club or "",
+        } for u in users]
+    })
+
+
+@app.route("/api/analyze/<int:opponent_id>", methods=["POST"])
+@login_required
+def api_analyze_opponent(opponent_id):
+    """상대선수 분석 실행. Gemini API 호출."""
+    from gemini import analyze_opponent
+    op = User.query.get_or_404(opponent_id)
+    if op.id == current_user.id:
+        return jsonify({"error": "본인을 분석할 수는 없습니다."}), 400
+    if not op.playstyle_public:
+        return jsonify({"error": "이 선수는 분석 정보 공개를 허용하지 않았습니다."}), 403
+
+    me = {
+        "name": current_user.name,
+        "handedness": current_user.handedness,
+        "strengths": current_user.strengths,
+        "weaknesses": current_user.weaknesses,
+        "region": current_user.region, "club": current_user.club,
+    }
+    opp = {
+        "name": op.name,
+        "handedness": op.handedness,
+        "strengths": op.strengths,
+        "weaknesses": op.weaknesses,
+        "region": op.region, "club": op.club,
+    }
+    r = analyze_opponent(me, opp)
+    return jsonify({
+        "success": r["success"],
+        "text": r.get("text"),
+        "opponent": {
+            "id": op.id, "name": op.name,
+            "region": op.region or "", "club": op.club or "",
+            "handedness": op.handedness or "",
+            "strengths": op.strengths or "", "weaknesses": op.weaknesses or "",
+        },
+        "hint": None if r["success"] else "AI 분석 서비스가 미설정 상태거나 응답하지 못했습니다. 기본 분석을 대신 표시합니다.",
+    })
 
 
 # gunicorn 부트 시(WSGI 임포트만으로 앱 시작) 스키마를 최신화한다

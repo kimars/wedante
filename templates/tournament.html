@@ -40,6 +40,7 @@
   {% if t.parking_url %}<a class="quick-link" href="{{ t.parking_url }}" target="_blank" rel="noopener">🅿️ 주차등록</a>{% endif %}
   {% if t.organizer and t.organizer.band_url %}<a class="quick-link" href="{{ t.organizer.band_url }}" target="_blank" rel="noopener">💬 위단테 밴드</a>{% endif %}
   {% if t.organizer and t.organizer.youtube_url %}<a class="quick-link" href="{{ t.organizer.youtube_url }}" target="_blank" rel="noopener">▶ 유튜브</a>{% endif %}
+  <a class="quick-link" href="{{ url_for('game_tennis') }}">🎾 대기 중 미니게임</a>
   <a class="quick-link" href="tel:010-6890-9123">📞 결과보고/본부요청 010-6890-9123</a>
 </div>
 
@@ -158,6 +159,43 @@
 </div>
 {% endif %}
 
+{% if is_manager %}
+<!-- 점수 입력 모달 (관리자 전용) - 예선/본선 매치 결과 입력 -->
+<div id="score-modal" class="modal-backdrop" style="display:none;">
+  <div class="modal-card" style="max-width:460px;">
+    <div class="card-row" style="margin-bottom:14px;">
+      <strong id="score-modal-title">경기 점수 입력</strong>
+      <button class="secondary" onclick="closeScoreModal()" style="padding:4px 10px;">닫기</button>
+    </div>
+    <div id="score-modal-meta" style="font-size:13px;color:var(--ink-soft);margin-bottom:14px;"></div>
+
+    <div class="field">
+      <label>스코어</label>
+      <input id="score-input" placeholder="예: 6-3, 6-4 또는 6-3 6-4" style="width:100%;padding:12px;border:1px solid var(--border-strong);border-radius:8px;font:inherit;font-size:16px;box-sizing:border-box;">
+      <p style="font-size:12px;color:var(--ink-faint);margin:4px 0 0;">선수가 전화로 알려준 스코어를 그대로 입력하세요.</p>
+    </div>
+
+    <div class="field">
+      <label>승자 선택</label>
+      <div class="card-row" style="gap:10px;">
+        <button id="score-winner-p1" class="score-winner-btn" onclick="pickWinner(1)">
+          <span class="score-winner-name" id="score-p1-name">-</span> 승
+        </button>
+        <button id="score-winner-p2" class="score-winner-btn" onclick="pickWinner(2)">
+          <span class="score-winner-name" id="score-p2-name">-</span> 승
+        </button>
+      </div>
+    </div>
+
+    <div class="card-row" style="gap:8px;margin-top:16px;">
+      <button onclick="saveScore()" style="flex:1;">💾 저장</button>
+      <button class="secondary" onclick="markInProgress()" id="score-live-btn">▶ 진행중으로</button>
+    </div>
+    <p id="score-modal-error" style="color:#e33;font-size:12px;margin-top:8px;display:none;"></p>
+  </div>
+</div>
+{% endif %}
+
 <h2>예선 대진표</h2>
 <div class="bracket-tabs">
   <button class="bracket-tab active" data-tab="prelim" onclick="switchBracketTab('prelim')">예선</button>
@@ -214,9 +252,6 @@
   <h3 style="margin-top:0;">본선 대진표</h3>
   <div id="main-bracket" class="bracket"></div>
 </div>
-
-<h2 style="margin-top:32px;">코트 현황</h2>
-<div id="court-board" class="group-grid"><p style="color:var(--ink-faint);">배정된 코트가 없습니다.</p></div>
 
 {% endblock %}
 
@@ -422,7 +457,6 @@ function loadDraw() {
     .then(data => {
       renderPrelim(data.prelim);
       renderMain(data.main);
-      renderCourts(data.prelim.concat(data.main));
     })
     .catch(err => console.error("Draw load failed:", err));
 }
@@ -478,10 +512,15 @@ function renderPrelim(matches) {
           }
           const seqBadge = m.seq_in_group ? `<span class="seq-badge">${m.seq_in_group}경기</span>` : '';
           const startedAttr = m.started_at ? `data-started-at="${m.started_at}"` : '';
+          // 관리자면 매치 클릭 → 점수 입력 모달. 양쪽 선수가 확정된 경우에만 활성화.
+          const bothSet = !!(m.player1_id && m.player2_id);
+          const canEdit = IS_MANAGER && bothSet;
+          const clickAttr = canEdit ? `onclick="openScoreModal(${m.id})" style="cursor:pointer;"` : '';
+          const editHint = canEdit ? `<button class="score-edit-btn" onclick="event.stopPropagation();openScoreModal(${m.id})" title="점수 입력">${m.status === '종료' ? '✎' : '📝 점수'}</button>` : '';
           return `
-            <div class="prelim-match-row" ${startedAttr}>
+            <div class="prelim-match-row ${canEdit ? 'editable' : ''}" ${startedAttr} ${clickAttr}>
               <div class="prelim-match-label">${seqBadge} ${escapeHtml(p1Label)} <span class="vs">vs</span> ${escapeHtml(p2Label)}</div>
-              <div class="prelim-match-meta">${timeChip}<span class="score-chip ${scoreClass}">${scoreLabel}</span></div>
+              <div class="prelim-match-meta">${timeChip}<span class="score-chip ${scoreClass}">${scoreLabel}</span>${editHint}</div>
             </div>`;
         }).join("")}
       </div>`;
@@ -543,26 +582,98 @@ function renderMain(matches) {
 }
 
 function renderCourts(all) {
-  const withCourt = all.filter(m => m.court);
-  const courtBoard = document.getElementById("court-board");
-  if (!withCourt.length) {
-    courtBoard.innerHTML = '<p style="color:var(--ink-faint);">배정된 코트가 없습니다.</p>';
-    return;
-  }
-  const byCourt = {};
-  withCourt.forEach(m => { (byCourt[m.court] ||= []).push(m); });
-  courtBoard.innerHTML = Object.entries(byCourt).map(([court, ms]) => `
-    <div class="group-card">
-      <h3>${escapeHtml(court)}코트</h3>
-      ${ms.map(m => `
-        <div class="match-row">
-          <span>${escapeHtml(m.player1) || '?'} vs ${escapeHtml(m.player2) || '?'}</span>
-          <span class="score">${escapeHtml(m.scheduled_time || m.status)}</span>
-        </div>`).join("")}
-    </div>`).join("");
+  /* [삭제됨] 이 섹션은 예선 대진표 조 카드에 코트/시간이 표시되어 중복이라 제거함.
+     하위호환을 위해 no-op 함수만 남겨둠. */
 }
 
 loadDraw();
+
+// ---- 점수 입력 모달 (관리자 전용) ----
+let scoreModalMatchId = null;
+let scoreModalWinnerSlot = null;   // 1 또는 2
+let scoreModalMatch = null;
+
+function openScoreModal(mid) {
+  if (!IS_MANAGER) return;
+  // 현재 로드된 draw에서 매치 찾기
+  fetch(`/api/tournaments/${TID}/draw`)
+    .then(r => r.json())
+    .then(data => {
+      const all = data.prelim.concat(data.main);
+      const m = all.find(x => x.id === mid);
+      if (!m) { toast("매치를 찾을 수 없습니다.", "error"); return; }
+      if (!m.player1_id || !m.player2_id) {
+        toast("아직 상대가 정해지지 않은 경기입니다.", "error"); return;
+      }
+      scoreModalMatchId = mid;
+      scoreModalMatch = m;
+      scoreModalWinnerSlot = m.winner_id === m.player1_id ? 1
+                            : m.winner_id === m.player2_id ? 2 : null;
+
+      const stage = m.stage === 'prelim' ? `${m.group_no}조 ${m.seq_in_group}경기` : `${m.round_name} ${m.match_no}경기`;
+      const meta = [stage];
+      if (m.court) meta.push(`${m.court}코트`);
+      if (m.scheduled_time) meta.push(m.scheduled_time);
+      meta.push(`상태: ${m.status}`);
+
+      document.getElementById("score-modal-title").innerText = "경기 결과 입력";
+      document.getElementById("score-modal-meta").innerText = meta.join(" · ");
+      document.getElementById("score-input").value = m.score || "";
+      document.getElementById("score-p1-name").innerText = teamLabel(m.player1, m.player1_partner);
+      document.getElementById("score-p2-name").innerText = teamLabel(m.player2, m.player2_partner);
+      updateWinnerButtons();
+      document.getElementById("score-live-btn").style.display = m.status === '종료' ? 'none' : '';
+      document.getElementById("score-modal-error").style.display = "none";
+      document.getElementById("score-modal").style.display = "flex";
+      setTimeout(() => document.getElementById("score-input").focus(), 100);
+    });
+}
+function closeScoreModal() {
+  document.getElementById("score-modal").style.display = "none";
+  scoreModalMatchId = null;
+  scoreModalWinnerSlot = null;
+  scoreModalMatch = null;
+}
+function pickWinner(slot) {
+  scoreModalWinnerSlot = slot;
+  updateWinnerButtons();
+}
+function updateWinnerButtons() {
+  document.getElementById("score-winner-p1").classList.toggle("selected", scoreModalWinnerSlot === 1);
+  document.getElementById("score-winner-p2").classList.toggle("selected", scoreModalWinnerSlot === 2);
+}
+function saveScore() {
+  const score = document.getElementById("score-input").value.trim();
+  const errEl = document.getElementById("score-modal-error");
+  errEl.style.display = "none";
+  if (!scoreModalWinnerSlot) {
+    errEl.innerText = "승자를 선택해주세요.";
+    errEl.style.display = "block";
+    return;
+  }
+  if (!score) {
+    errEl.innerText = "스코어를 입력해주세요. (예: 6-3, 6-4)";
+    errEl.style.display = "block";
+    return;
+  }
+  const winnerId = scoreModalWinnerSlot === 1 ? scoreModalMatch.player1_id : scoreModalMatch.player2_id;
+  apiPost(`/api/matches/${scoreModalMatchId}/score`, {winner_id: winnerId, score})
+    .then(() => {
+      toast("경기 결과 저장 완료", "success");
+      closeScoreModal();
+      loadDraw();
+    })
+    .catch(err => {
+      errEl.innerText = err.message;
+      errEl.style.display = "block";
+    });
+}
+function markInProgress() {
+  if (!scoreModalMatchId) return;
+  apiPost(`/api/matches/${scoreModalMatchId}/start`, {})
+    .then(() => { toast("진행중으로 표시", "success"); closeScoreModal(); loadDraw(); })
+    .catch(err => toast(err.message, "error"));
+}
 
 // 진행중 매치의 실시간 분 카운트 - 매 30초마다 재계산
 function updateLiveTimers() {

@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}상대선수 분석 · 위단테{% endblock %}
+{% block content %}
+<span class="eyebrow">Match Prep · AI Analysis</span>
+<h1>🎯 상대선수 분석</h1>
+<p style="color:var(--ink-soft);max-width:640px;">
+  대회 전날 상대 선수를 미리 분석해보세요. 상대의 강점/약점을 바탕으로 AI가 실전 전략을 제안합니다.
+  분석은 회원가입 시 등록한 <strong>선수 프로필(강점/약점)</strong>을 기반으로 합니다.
+</p>
+
+{% if not current_user.strengths and not current_user.weaknesses %}
+<div class="card" style="border-left:4px solid #d97706;background:#fff8e6;">
+  <strong>💡 프로필 정보를 채워주세요</strong>
+  <p style="margin:6px 0 12px;font-size:14px;">
+    본인의 강점과 약점을 <a href="{{ url_for('profile') }}" style="color:var(--primary);font-weight:700;">프로필</a>에 등록하면
+    분석이 더 정확해집니다. (예: 강점 - 슬라이스 서브, 정확한 발리 / 약점 - 백핸드가 짧다, 긴 랠리에서 체력 저하)
+  </p>
+</div>
+{% endif %}
+
+<div class="card">
+  <label style="display:block;font-size:13px;font-weight:600;margin-bottom:6px;color:var(--ink-soft);">
+    상대 선수 이름 또는 전화번호 검색
+  </label>
+  <div style="display:flex;gap:8px;">
+    <input id="analyze-search" placeholder="예: 김준수 또는 01012345678" autocomplete="off"
+           style="flex:1;padding:12px;border:1px solid var(--border-strong);border-radius:8px;font:inherit;">
+    <button onclick="doSearch()">🔍 검색</button>
+  </div>
+  <div id="analyze-search-results" style="margin-top:12px;"></div>
+</div>
+
+<div id="analyze-result-area" style="margin-top:24px;"></div>
+
+<style>
+.analyze-candidate {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 12px; background: #fff;
+  border: 1px solid var(--border); border-radius: 10px; margin-bottom: 6px;
+  cursor: pointer; transition: all .18s var(--ease);
+}
+.analyze-candidate:hover { background: var(--surface); border-color: var(--primary); transform: translateX(3px); }
+.analyze-candidate .candidate-name { font-weight: 700; }
+.analyze-candidate .candidate-meta { font-size: 12px; color: var(--ink-faint); }
+
+.analyze-report {
+  background: linear-gradient(135deg, #f8fdfc 0%, #eef7ff 100%);
+  border-left: 4px solid var(--primary);
+  border-radius: 14px; padding: 24px 28px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.06);
+  animation: fadeInUp .4s var(--ease);
+}
+@keyframes fadeInUp { from { opacity:0; transform: translateY(12px); } to { opacity:1; transform:none; } }
+
+.analyze-report .ai-badge {
+  display: inline-block; font-size: 11px; font-weight: 800; letter-spacing: 1.5px;
+  background: linear-gradient(135deg, #667eea, #764ba2); color: #fff;
+  padding: 3px 10px; border-radius: 999px; margin-bottom: 12px;
+}
+.analyze-report h3 { margin: 0 0 12px; font-size: 20px; }
+.analyze-report .report-body {
+  font-size: 15px; line-height: 1.7; color: var(--ink);
+  white-space: pre-wrap; word-break: keep-all;
+}
+.analyze-report .opponent-info {
+  margin-top: 20px; padding: 14px 16px; background: rgba(255,255,255,0.6);
+  border-radius: 10px; font-size: 13px;
+}
+.analyze-report .opponent-info dt { font-weight: 700; color: var(--ink-soft); }
+.analyze-report .opponent-info dd { margin: 2px 0 10px 0; color: var(--ink); }
+</style>
+
+<script>
+let searchTimeout;
+document.getElementById("analyze-search").addEventListener("input", (e) => {
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(() => doSearch(), 300);
+});
+document.getElementById("analyze-search").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); doSearch(); }
+});
+
+function doSearch() {
+  const q = document.getElementById("analyze-search").value.trim();
+  const box = document.getElementById("analyze-search-results");
+  if (q.length < 2) {
+    box.innerHTML = '<p style="font-size:12px;color:var(--ink-faint);margin:0;">두 글자 이상 입력해주세요.</p>';
+    return;
+  }
+  fetch(`/api/analyze/search?q=${encodeURIComponent(q)}`)
+    .then(r => r.json())
+    .then(d => {
+      if (!d.results || !d.results.length) {
+        box.innerHTML = '<p style="color:var(--ink-faint);margin:0;">일치하는 선수가 없습니다.</p>';
+        return;
+      }
+      box.innerHTML = d.results.map(u => `
+        <div class="analyze-candidate" onclick="analyzeOpponent(${u.id})">
+          <div>
+            <span class="candidate-name">${escapeHtml(u.name)}</span>
+            <span class="candidate-meta">
+              ${u.region ? '· ' + escapeHtml(u.region) : ''}
+              ${u.club ? '· ' + escapeHtml(u.club) : ''}
+            </span>
+          </div>
+          <span style="font-size:11px;color:var(--primary);font-weight:700;">분석하기 →</span>
+        </div>`).join("");
+    })
+    .catch(err => { box.innerHTML = `<p style="color:#e33;">검색 실패: ${escapeHtml(err.message)}</p>`; });
+}
+
+function analyzeOpponent(oid) {
+  const area = document.getElementById("analyze-result-area");
+  area.innerHTML = `<div class="card" style="text-align:center;padding:32px;">
+    <div style="font-size:32px;margin-bottom:8px;">🤖</div>
+    <p style="margin:0;color:var(--ink-soft);">AI가 상대 선수를 분석하고 있습니다...</p>
+  </div>`;
+  area.scrollIntoView({behavior: "smooth", block: "nearest"});
+
+  apiPost(`/api/analyze/${oid}`, {})
+    .then(r => renderReport(r))
+    .catch(err => {
+      area.innerHTML = `<div class="card" style="border-left:4px solid #e33;">
+        <strong style="color:#e33;">분석 실패</strong>
+        <p style="margin:6px 0 0;">${escapeHtml(err.message)}</p>
+      </div>`;
+    });
+}
+
+function renderReport(r) {
+  const op = r.opponent || {};
+  const area = document.getElementById("analyze-result-area");
+  const hintBox = r.hint
+    ? `<p style="font-size:12px;color:var(--ink-faint);margin:0 0 12px;padding:8px 12px;background:#fff3cd;border-radius:8px;">⚠ ${escapeHtml(r.hint)}</p>`
+    : '';
+  area.innerHTML = `
+    <div class="analyze-report">
+      <span class="ai-badge">${r.success ? '🤖 AI 분석 결과' : '📋 기본 분석'}</span>
+      ${hintBox}
+      <div class="report-body">${escapeHtml(r.text || '')}</div>
+
+      <div class="opponent-info">
+        <dt>상대 선수 등록 정보</dt>
+        <dd>
+          <strong>${escapeHtml(op.name || '')}</strong>
+          ${op.region ? '· ' + escapeHtml(op.region) : ''}
+          ${op.club ? '· ' + escapeHtml(op.club) : ''}
+          ${op.handedness === 'right' ? '· 오른손잡이' : op.handedness === 'left' ? '· 왼손잡이' : ''}
+        </dd>
+        ${op.strengths ? `<dt>강점</dt><dd>${escapeHtml(op.strengths)}</dd>` : ''}
+        ${op.weaknesses ? `<dt>약점</dt><dd>${escapeHtml(op.weaknesses)}</dd>` : ''}
+      </div>
+    </div>`;
+}
+
+function escapeHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
+}
+</script>
+{% endblock %}

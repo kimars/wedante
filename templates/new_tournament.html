@@ -13,6 +13,17 @@
       <option value="doubles">복식 (Doubles) - 선수 2명 = 1팀</option>
     </select>
   </div>
+  <div class="field">
+    <label>예선 코트 배치 방식</label>
+    <select name="groups_per_court">
+      <option value="2" selected>1코트에 2개 조 (참가자 많을 때) - 6경기, 30분 간격 교차 진행</option>
+      <option value="1">1코트에 1개 조 (참가자 적을 때) - 조당 3경기 연속</option>
+    </select>
+    <p style="font-size:12px;color:var(--ink-faint);margin:4px 0 0;">
+      · 2조 프레임: 코트당 6경기(A1→B1→A2→B2→A3→B3), 조 교차 진행<br>
+      · 1조 프레임: 코트당 3경기, 조가 코트를 단독 사용
+    </p>
+  </div>
   <div class="card-row" style="gap:12px;">
     <div class="field" style="flex:1;"><label>첫 경기 시작 시각</label><input name="start_time" placeholder="09:00" value="09:00"></div>
     <div class="field" style="flex:1;"><label>경기 간격 (분)</label><input name="match_interval_min" type="number" value="30" min="10" max="120"></div>

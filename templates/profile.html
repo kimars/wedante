@@ -19,6 +19,34 @@
     <label>소속 클럽
       <input name="club" value="{{ current_user.club or '' }}" style="width:100%;padding:10px;border:1px solid var(--border-strong);border-radius:8px;">
     </label>
+
+    <div style="background:linear-gradient(135deg,#f8fdfc,#eef7ff);padding:14px 16px;border-radius:12px;margin:8px 0;">
+      <strong style="color:var(--primary);display:block;margin-bottom:6px;">🎾 선수 프로필 (상대선수 분석용)</strong>
+      <p style="font-size:12px;color:var(--ink-faint);margin:0 0 12px;">
+        상대들이 여러분을 분석할 때 이 정보가 사용됩니다. 여러분도 <a href="{{ url_for('analyze_opponent_page') }}" style="color:var(--primary);font-weight:700;">상대선수 분석</a> 페이지에서 다른 선수를 분석할 수 있어요.
+      </p>
+      <label style="display:block;margin-bottom:10px;">주 사용 손
+        <select name="handedness" style="width:100%;padding:10px;border:1px solid var(--border-strong);border-radius:8px;">
+          <option value="" {% if not current_user.handedness %}selected{% endif %}>선택 안 함</option>
+          <option value="right" {% if current_user.handedness == 'right' %}selected{% endif %}>오른손잡이</option>
+          <option value="left" {% if current_user.handedness == 'left' %}selected{% endif %}>왼손잡이</option>
+        </select>
+      </label>
+      <label style="display:block;margin-bottom:10px;">나의 강점
+        <textarea name="strengths" rows="2" placeholder="예: 강력한 포핸드, 정확한 서브, 발리 감각이 좋음"
+                  style="width:100%;padding:10px;border:1px solid var(--border-strong);border-radius:8px;font:inherit;box-sizing:border-box;">{{ current_user.strengths or '' }}</textarea>
+      </label>
+      <label style="display:block;margin-bottom:10px;">나의 약점
+        <textarea name="weaknesses" rows="2" placeholder="예: 백핸드가 짧음, 긴 랠리에서 체력 저하, 로브에 취약"
+                  style="width:100%;padding:10px;border:1px solid var(--border-strong);border-radius:8px;font:inherit;box-sizing:border-box;">{{ current_user.weaknesses or '' }}</textarea>
+      </label>
+      <input type="hidden" name="playstyle_form_submitted" value="1">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500;cursor:pointer;">
+        <input type="checkbox" name="playstyle_public" {% if current_user.playstyle_public %}checked{% endif %} style="width:18px;height:18px;">
+        상대선수 분석에 내 프로필 공개
+      </label>
+    </div>
+
     <label>환불 계좌 은행
       <input name="refund_bank" value="{{ current_user.refund_bank or '' }}" placeholder="예: 카카오뱅크" style="width:100%;padding:10px;border:1px solid var(--border-strong);border-radius:8px;">
     </label>

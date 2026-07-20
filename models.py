@@ -47,6 +47,10 @@ class User(db.Model, UserMixin):
     phone = db.Column(db.String(20), unique=True, nullable=False, index=True)
     region = db.Column(db.String(50))                          # 지역
     club = db.Column(db.String(80))                            # 소속클럽
+    handedness = db.Column(db.String(10))                       # right / left (선택)
+    strengths = db.Column(db.Text)                              # 자신의 강점 (분석용)
+    weaknesses = db.Column(db.Text)                             # 자신의 약점 (분석용)
+    playstyle_public = db.Column(db.Boolean, default=True)      # 분석 공개 허용 (기본 공개)
     _refund_bank_enc = db.Column("refund_bank_enc", db.String(255))     # 암호화 저장
     _refund_account_enc = db.Column("refund_account_enc", db.String(255))  # 암호화 저장
     password_hash = db.Column(db.String(255), nullable=False)
@@ -93,6 +97,8 @@ class Tournament(db.Model):
     group_size = db.Column(db.Integer, default=3)    # 예선 조 인원(단식) / 조 팀 수(복식)
     start_time = db.Column(db.String(10), default="09:00")   # 첫 경기 시작 시각
     match_interval_min = db.Column(db.Integer, default=30)  # 경기 간격(분)
+    groups_per_court = db.Column(db.Integer, default=2)     # 1코트당 조 수 (1 또는 2)
+    main_bracket_frame = db.Column(db.Text)                  # 본선 슬롯 사전 배치 JSON (선택)
     parking_url = db.Column(db.String(400))          # 주차등록 링크 (외부)
     deposit_bank = db.Column(db.String(40))          # 참가비 입금계좌 은행
     deposit_account = db.Column(db.String(40))       # 참가비 입금계좌 번호

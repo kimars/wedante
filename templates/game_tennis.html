@@ -1,0 +1,436 @@
+{% extends "base.html" %}
+{% block title %}테니스 게임 · 위단테{% endblock %}
+{% block content %}
+<span class="eyebrow">Mini Game · 대회 대기 중이라면</span>
+<h1>🎾 위단테 Pong</h1>
+<p style="color:var(--ink-soft);max-width:640px;">
+  실제 테니스 스코어링(0-15-30-40-Game)으로 즐기는 미니 게임. 라켓을 <strong>좌우로 움직여</strong> 공을 받아치세요.
+  <strong>3게임 먼저</strong> 이기면 승리 🏆
+</p>
+
+<div class="tennis-game-wrap">
+  <div class="tennis-score-bar">
+    <div class="tennis-score-side ai">
+      <div class="tennis-score-label">AI</div>
+      <div class="tennis-score-points" id="ai-points">0</div>
+      <div class="tennis-score-games" id="ai-games">0 게임</div>
+    </div>
+    <div class="tennis-score-vs">VS</div>
+    <div class="tennis-score-side you">
+      <div class="tennis-score-label">YOU</div>
+      <div class="tennis-score-points" id="you-points">0</div>
+      <div class="tennis-score-games" id="you-games">0 게임</div>
+    </div>
+  </div>
+
+  <div class="tennis-canvas-wrap">
+    <canvas id="tennis-canvas" width="360" height="560" style="touch-action:none;"></canvas>
+    <div id="tennis-overlay" class="tennis-overlay">
+      <div class="tennis-overlay-content">
+        <div style="font-size:48px;margin-bottom:8px;">🎾</div>
+        <h2 id="tennis-overlay-title" style="margin:0 0 8px;">위단테 Pong</h2>
+        <p id="tennis-overlay-msg" style="color:var(--ink-soft);margin:0 0 20px;font-size:14px;">
+          손가락/마우스로 라켓을 좌우로 움직이세요.<br>
+          3게임 먼저 이기면 승리!
+        </p>
+        <button onclick="startGame()" id="tennis-start-btn" style="font-size:16px;padding:12px 32px;">시작</button>
+        <p id="tennis-best" style="font-size:12px;color:var(--ink-faint);margin-top:16px;"></p>
+      </div>
+    </div>
+  </div>
+
+  <div class="tennis-controls-hint">
+    <p style="font-size:13px;color:var(--ink-soft);text-align:center;margin:0;">
+      💡 라켓 이동: <strong>마우스</strong> 또는 <strong>손가락 드래그</strong> · 실제 테니스 스코어(0-15-30-40-Game)로 진행
+    </p>
+  </div>
+
+  <div style="display:flex;gap:8px;justify-content:center;margin-top:16px;flex-wrap:wrap;">
+    <a class="btn secondary" href="{{ url_for('index') }}">← 홈으로</a>
+    <button class="secondary" onclick="setDifficulty('easy')" id="diff-easy">쉬움</button>
+    <button class="secondary" onclick="setDifficulty('normal')" id="diff-normal">보통</button>
+    <button class="secondary" onclick="setDifficulty('hard')" id="diff-hard">어려움</button>
+  </div>
+</div>
+
+<style>
+.tennis-game-wrap { max-width: 400px; margin: 20px auto; }
+.tennis-score-bar {
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+  gap: 12px; padding: 12px 16px; background: linear-gradient(135deg, #0E9F8C, #0B7A6B);
+  color: #fff; border-radius: 14px 14px 0 0; box-shadow: 0 4px 12px rgba(14, 159, 140, 0.25);
+}
+.tennis-score-side { text-align: center; }
+.tennis-score-side.ai .tennis-score-label { color: #FFD166; }
+.tennis-score-side.you .tennis-score-label { color: #7fffd4; }
+.tennis-score-label { font-size: 11px; letter-spacing: 2px; font-weight: 800; opacity: 0.9; }
+.tennis-score-points {
+  font-size: 32px; font-weight: 900; font-family: var(--font-mono, monospace);
+  line-height: 1; margin: 2px 0;
+  font-variant-numeric: tabular-nums;
+}
+.tennis-score-games { font-size: 11px; opacity: 0.8; }
+.tennis-score-vs { font-size: 12px; font-weight: 800; opacity: 0.7; letter-spacing: 1px; }
+
+.tennis-canvas-wrap {
+  position: relative; background: #2f8b3f;
+  border-radius: 0; overflow: hidden;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+}
+#tennis-canvas {
+  display: block; margin: 0 auto; background: #2f8b3f;
+  width: 100%; height: auto; max-width: 400px;
+}
+
+.tennis-overlay {
+  position: absolute; inset: 0;
+  background: rgba(0,0,0,0.65); backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center;
+  transition: opacity 0.3s var(--ease);
+}
+.tennis-overlay.hidden { opacity: 0; pointer-events: none; }
+.tennis-overlay-content {
+  background: #fff; padding: 28px 24px; border-radius: 16px;
+  text-align: center; max-width: 300px; margin: 12px;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.3);
+}
+
+.tennis-controls-hint {
+  background: var(--surface); padding: 10px 14px;
+  border-radius: 0 0 14px 14px; border: 1px solid var(--border); border-top: none;
+}
+
+#diff-easy.active, #diff-normal.active, #diff-hard.active {
+  background: var(--grad); color: #fff; border-color: transparent;
+}
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ========== 위단테 Pong: 테니스 스코어링 미니 게임 ==========
+
+const canvas = document.getElementById("tennis-canvas");
+const ctx = canvas.getContext("2d");
+const W = canvas.width;   // 360
+const H = canvas.height;  // 560
+
+// 게임 상태
+let state = {
+  running: false,
+  playerX: W / 2,
+  aiX: W / 2,
+  ball: {x: W/2, y: H/2, vx: 0, vy: 0, r: 8},
+  playerPoints: 0,     // 0, 15, 30, 40, adv
+  aiPoints: 0,
+  playerGames: 0,
+  aiGames: 0,
+  difficulty: "normal",
+  serving: "player",   // 다음 서브는 누가
+  rallyCount: 0,
+  hitFlash: 0,         // 라켓에 맞으면 임팩트 효과
+};
+
+const PADDLE_W = 68;
+const PADDLE_H = 12;
+const BALL_R = 8;
+
+const DIFFICULTIES = {
+  easy:   { aiSpeed: 2.4, ballSpeed: 4.5, aiLag: 24 },
+  normal: { aiSpeed: 3.6, ballSpeed: 5.5, aiLag: 14 },
+  hard:   { aiSpeed: 4.8, ballSpeed: 6.5, aiLag: 6 },
+};
+
+function setDifficulty(level) {
+  state.difficulty = level;
+  ["easy", "normal", "hard"].forEach(l => {
+    document.getElementById(`diff-${l}`).classList.toggle("active", l === level);
+  });
+}
+setDifficulty("normal");
+
+// 최고 기록
+function updateBestDisplay() {
+  const wins = parseInt(localStorage.getItem("wedante_tennis_wins") || "0", 10);
+  const bestRally = parseInt(localStorage.getItem("wedante_tennis_best_rally") || "0", 10);
+  const bestEl = document.getElementById("tennis-best");
+  if (wins > 0 || bestRally > 0) {
+    bestEl.innerText = `🏆 총 승리: ${wins}회 · 최장 랠리: ${bestRally}회`;
+  }
+}
+updateBestDisplay();
+
+// 서브 (공을 다시 발사)
+function serve(who) {
+  const d = DIFFICULTIES[state.difficulty];
+  state.ball.x = W / 2;
+  state.ball.y = who === "player" ? H - 100 : 100;
+  const angle = (Math.random() * 0.6 - 0.3);  // -0.3 ~ 0.3 rad
+  state.ball.vx = Math.sin(angle) * d.ballSpeed;
+  state.ball.vy = (who === "player" ? -1 : 1) * Math.cos(angle) * d.ballSpeed;
+  state.rallyCount = 0;
+}
+
+// 게임 시작
+function startGame() {
+  state.running = true;
+  state.playerPoints = 0; state.aiPoints = 0;
+  state.playerGames = 0; state.aiGames = 0;
+  state.serving = "player";
+  serve("player");
+  updateScoreDisplay();
+  document.getElementById("tennis-overlay").classList.add("hidden");
+  requestAnimationFrame(loop);
+}
+
+// 테니스 점수 문자열
+function pointsLabel(n) {
+  if (n === 0) return "0";
+  if (n === 1) return "15";
+  if (n === 2) return "30";
+  if (n === 3) return "40";
+  if (n === 4) return "AD";  // 어드밴티지
+  return "GAME";
+}
+
+function updateScoreDisplay() {
+  document.getElementById("you-points").innerText = pointsLabel(state.playerPoints);
+  document.getElementById("ai-points").innerText = pointsLabel(state.aiPoints);
+  document.getElementById("you-games").innerText = state.playerGames + " 게임";
+  document.getElementById("ai-games").innerText = state.aiGames + " 게임";
+}
+
+// 포인트 획득
+function scorePoint(winner) {
+  if (winner === "player") state.playerPoints++;
+  else state.aiPoints++;
+
+  // 최장 랠리 기록
+  const bestRally = parseInt(localStorage.getItem("wedante_tennis_best_rally") || "0", 10);
+  if (state.rallyCount > bestRally) {
+    localStorage.setItem("wedante_tennis_best_rally", state.rallyCount);
+  }
+
+  // 게임 승부 판정 (테니스 규칙)
+  // - 4점 도달 + 상대와 2점 차이 이상이면 게임 승
+  // - 3-3 (듀스) 이후는 AD 상태 → AD에서 이기면 게임 승
+  let gameWinner = null;
+  const p = state.playerPoints, a = state.aiPoints;
+  if (p >= 4 && p - a >= 2) gameWinner = "player";
+  else if (a >= 4 && a - p >= 2) gameWinner = "ai";
+
+  if (gameWinner) {
+    if (gameWinner === "player") state.playerGames++;
+    else state.aiGames++;
+    state.playerPoints = 0; state.aiPoints = 0;
+
+    // 매치 승부 (3게임 먼저 이기면 승)
+    if (state.playerGames >= 3) return endMatch("player");
+    if (state.aiGames >= 3) return endMatch("ai");
+
+    // 다음 서브
+    state.serving = gameWinner === "player" ? "ai" : "player";
+  } else {
+    state.serving = winner === "player" ? "ai" : "player";
+  }
+  updateScoreDisplay();
+  serve(state.serving);
+}
+
+function endMatch(winner) {
+  state.running = false;
+  updateScoreDisplay();
+  const title = winner === "player" ? "🏆 승리!" : "😔 패배...";
+  const msg = winner === "player"
+    ? `${state.playerGames} - ${state.aiGames} 로 이겼습니다!<br>최장 랠리: ${state.rallyCount}회`
+    : `${state.aiGames} - ${state.playerGames} 로 졌습니다.<br>다시 도전해보세요!`;
+  document.getElementById("tennis-overlay-title").innerText = title;
+  document.getElementById("tennis-overlay-msg").innerHTML = msg;
+  document.getElementById("tennis-start-btn").innerText = "다시 시작";
+  if (winner === "player") {
+    const wins = parseInt(localStorage.getItem("wedante_tennis_wins") || "0", 10) + 1;
+    localStorage.setItem("wedante_tennis_wins", wins);
+  }
+  updateBestDisplay();
+  document.getElementById("tennis-overlay").classList.remove("hidden");
+}
+
+// 라켓 위치 (터치/마우스)
+function updatePaddleFromEvent(clientX) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = W / rect.width;
+  state.playerX = Math.max(PADDLE_W/2, Math.min(W - PADDLE_W/2, (clientX - rect.left) * scaleX));
+}
+canvas.addEventListener("mousemove", (e) => updatePaddleFromEvent(e.clientX));
+canvas.addEventListener("touchmove", (e) => {
+  if (e.touches.length) { e.preventDefault(); updatePaddleFromEvent(e.touches[0].clientX); }
+}, {passive: false});
+canvas.addEventListener("touchstart", (e) => {
+  if (e.touches.length) { e.preventDefault(); updatePaddleFromEvent(e.touches[0].clientX); }
+}, {passive: false});
+
+// 물리 업데이트
+function update() {
+  const b = state.ball;
+  const d = DIFFICULTIES[state.difficulty];
+
+  // 공 이동
+  b.x += b.vx;
+  b.y += b.vy;
+
+  // 좌우 벽 반사
+  if (b.x - b.r < 0) { b.x = b.r; b.vx *= -1; }
+  if (b.x + b.r > W) { b.x = W - b.r; b.vx *= -1; }
+
+  // AI 이동 (공 x를 목표로 따라감, 반응 지연)
+  const targetX = b.x;
+  const aiDiff = targetX - state.aiX;
+  const aiStep = Math.min(Math.abs(aiDiff), d.aiSpeed) * Math.sign(aiDiff);
+  // 공이 자기 쪽으로 올 때만 반응 (aiLag 만큼 지연)
+  if (b.vy < 0 && b.y < H / 2 + d.aiLag) {
+    state.aiX += aiStep;
+    // 약간의 인간적 미스 (어려움에선 작음)
+    if (state.difficulty === "easy" && Math.random() < 0.02) state.aiX += (Math.random() - 0.5) * 30;
+  }
+  state.aiX = Math.max(PADDLE_W/2, Math.min(W - PADDLE_W/2, state.aiX));
+
+  // 라켓 충돌 판정
+  // 플레이어 라켓: y = H - 24
+  const playerY = H - 24;
+  const aiY = 24;
+
+  // 플레이어와 충돌
+  if (b.vy > 0 && b.y + b.r >= playerY && b.y + b.r <= playerY + PADDLE_H) {
+    if (b.x >= state.playerX - PADDLE_W/2 && b.x <= state.playerX + PADDLE_W/2) {
+      b.vy = -Math.abs(b.vy);
+      // 라켓의 어느 부분에 맞았는지에 따라 vx 조정
+      const offset = (b.x - state.playerX) / (PADDLE_W/2);
+      b.vx = offset * d.ballSpeed * 0.9;
+      // 속도 약간 증가 (랠리가 길어질수록 빨라짐)
+      const speedMul = 1 + Math.min(state.rallyCount * 0.01, 0.4);
+      const sp = Math.hypot(b.vx, b.vy) * 1.03 * speedMul;
+      const norm = Math.hypot(b.vx, b.vy);
+      if (norm > 0) { b.vx = (b.vx/norm) * Math.min(sp, d.ballSpeed * 2); b.vy = (b.vy/norm) * Math.min(sp, d.ballSpeed * 2); }
+      state.rallyCount++;
+      state.hitFlash = 6;
+    }
+  }
+  // AI와 충돌
+  if (b.vy < 0 && b.y - b.r <= aiY + PADDLE_H && b.y - b.r >= aiY) {
+    if (b.x >= state.aiX - PADDLE_W/2 && b.x <= state.aiX + PADDLE_W/2) {
+      b.vy = Math.abs(b.vy);
+      const offset = (b.x - state.aiX) / (PADDLE_W/2);
+      b.vx = offset * d.ballSpeed * 0.9;
+      state.rallyCount++;
+      state.hitFlash = 6;
+    }
+  }
+
+  // 위/아래로 나감 → 득점
+  if (b.y > H + 30) {
+    scorePoint("ai");   // 플레이어가 못 받음 → AI 득점
+  } else if (b.y < -30) {
+    scorePoint("player");  // AI가 못 받음 → 플레이어 득점
+  }
+
+  if (state.hitFlash > 0) state.hitFlash--;
+}
+
+// 렌더링
+function render() {
+  ctx.clearRect(0, 0, W, H);
+
+  // 코트 배경
+  ctx.fillStyle = "#2f8b3f";
+  ctx.fillRect(0, 0, W, H);
+
+  // 코트 라인 (하얀색)
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
+  ctx.lineWidth = 2;
+  // 사각 경계
+  ctx.strokeRect(8, 8, W - 16, H - 16);
+  // 서비스 라인 (상/하)
+  ctx.beginPath();
+  ctx.moveTo(8, H / 3);
+  ctx.lineTo(W - 8, H / 3);
+  ctx.moveTo(8, H * 2 / 3);
+  ctx.lineTo(W - 8, H * 2 / 3);
+  ctx.stroke();
+  // 센터 라인
+  ctx.beginPath();
+  ctx.moveTo(W / 2, H / 3);
+  ctx.lineTo(W / 2, H * 2 / 3);
+  ctx.stroke();
+  // 네트
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.7)";
+  ctx.setLineDash([4, 4]);
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(0, H / 2);
+  ctx.lineTo(W, H / 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.lineWidth = 2;
+
+  // AI 라켓 (빨강)
+  ctx.fillStyle = "#e74c3c";
+  ctx.fillRect(state.aiX - PADDLE_W/2, 24, PADDLE_W, PADDLE_H);
+  ctx.strokeStyle = "#b13224";
+  ctx.strokeRect(state.aiX - PADDLE_W/2, 24, PADDLE_W, PADDLE_H);
+
+  // 플레이어 라켓 (파랑)
+  ctx.fillStyle = "#3498db";
+  ctx.fillRect(state.playerX - PADDLE_W/2, H - 24 - PADDLE_H + PADDLE_H, PADDLE_W, PADDLE_H);
+  ctx.fillRect(state.playerX - PADDLE_W/2, H - 24, PADDLE_W, PADDLE_H);
+  ctx.strokeStyle = "#217dbb";
+  ctx.strokeRect(state.playerX - PADDLE_W/2, H - 24, PADDLE_W, PADDLE_H);
+
+  // 공 (노랑 형광)
+  const b = state.ball;
+  // 그림자
+  ctx.beginPath();
+  ctx.arc(b.x, b.y + 3, b.r, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(0, 0, 0, 0.2)";
+  ctx.fill();
+  // 임팩트 플래시
+  if (state.hitFlash > 0) {
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r + state.hitFlash * 2, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255, 255, 255, ${state.hitFlash / 12})`;
+    ctx.fill();
+  }
+  // 공
+  ctx.beginPath();
+  ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+  ctx.fillStyle = "#F5FF3D";
+  ctx.fill();
+  ctx.strokeStyle = "#c9d02e";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  // 공 심 (테니스공 곡선)
+  ctx.beginPath();
+  ctx.arc(b.x, b.y, b.r, -Math.PI / 4, Math.PI / 4);
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // 랠리 카운트 (좌상단)
+  if (state.rallyCount > 0) {
+    ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+    ctx.font = "bold 14px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(`랠리 ${state.rallyCount}회`, W / 2, H / 2 - 8);
+  }
+}
+
+function loop() {
+  if (!state.running) return;
+  update();
+  render();
+  requestAnimationFrame(loop);
+}
+
+// 첫 화면 렌더 (배경만)
+render();
+</script>
+{% endblock %}
