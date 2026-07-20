@@ -53,14 +53,30 @@
 </div>
 {% endif %}
 
+<!-- 아이콘 아래 편의 기능 - 상대분석 + 미니게임 -->
+<div class="mini-features">
+  {% if current_user.is_authenticated and not current_user.is_admin %}
+  <a class="mini-feature-card analyze" href="{{ url_for('analyze_opponent_page') }}">
+    <span class="mini-feature-icon">🎯</span>
+    <span class="mini-feature-text">
+      <strong>상대선수 분석</strong>
+      <span>대회 전 상대의 강점/약점을 AI가 분석</span>
+    </span>
+  </a>
+  {% endif %}
+  <a class="mini-feature-card game" href="{{ url_for('game_tennis') }}">
+    <span class="mini-feature-icon">🎾</span>
+    <span class="mini-feature-text">
+      <strong>대기 중 미니게임</strong>
+      <span>테니스 Pong으로 대회 대기 시간 즐기기</span>
+    </span>
+  </a>
+</div>
+
 {% if active_org %}
 <h2>{{ active_org.name }} 대회 목록</h2>
-{% else %}
-<h2>진행 중인 대회</h2>
-{% endif %}
-
 <div class="tournament-list">
-  {% for t in tournaments %}
+  {% for t in live_tournaments %}
   <a class="tournament-item" href="{{ url_for('tournament_page', tid=t.id) }}" style="animation-delay:{{ loop.index0 * 0.06 }}s">
     <div>
       <strong>{{ t.title }}</strong>
@@ -72,6 +88,57 @@
   <p>등록된 대회가 없습니다.</p>
   {% endfor %}
 </div>
+{% else %}
+
+<h2>🔴 진행 중인 대회</h2>
+<p style="font-size:13px;color:var(--ink-faint);margin:-8px 0 12px;">오늘 열리는 대회</p>
+<div class="tournament-list">
+  {% for t in live_tournaments %}
+  <a class="tournament-item" href="{{ url_for('tournament_page', tid=t.id) }}" style="animation-delay:{{ loop.index0 * 0.06 }}s">
+    <div>
+      <strong>{{ t.title }}</strong>
+      <div class="meta">
+        {{ t.event_date }} · {{ t.location }} · 참가비 {{ "{:,}".format(t.entry_fee) }}원
+        {% if t.format %} · {{ '단식' if t.format == 'singles' else '복식' }}{% endif %}
+      </div>
+    </div>
+    <span class="badge {% if t.status in ['접수마감','종료'] %}closed{% elif t.status == '진행중' %}live{% endif %}">{{ t.status }}</span>
+  </a>
+  {% else %}
+  <p style="color:var(--ink-faint);">오늘 진행되는 대회가 없습니다.</p>
+  {% endfor %}
+</div>
+
+<h2 style="margin-top:32px;">📝 접수 중인 대회</h2>
+<p style="font-size:13px;color:var(--ink-faint);margin:-8px 0 12px;">참가 신청을 받고 있는 대회</p>
+<div class="tournament-list">
+  {% for t in open_tournaments %}
+  <a class="tournament-item" href="{{ url_for('tournament_page', tid=t.id) }}" style="animation-delay:{{ loop.index0 * 0.06 }}s">
+    <div>
+      <strong>{{ t.title }}</strong>
+      <div class="meta">
+        {{ t.event_date or '날짜 미정' }} · {{ t.location }} · 참가비 {{ "{:,}".format(t.entry_fee) }}원
+        {% if t.format %} · {{ '단식' if t.format == 'singles' else '복식' }}{% endif %}
+      </div>
+    </div>
+    <span class="badge">접수중</span>
+  </a>
+  {% else %}
+  <p style="color:var(--ink-faint);">현재 접수 중인 대회가 없습니다.</p>
+  {% endfor %}
+</div>
+
+<div style="display:flex;gap:10px;margin:20px 0 32px;">
+  <a class="btn secondary" href="{{ url_for('tournament_list_page', format='singles') }}"
+     style="flex:1;text-align:center;padding:14px;background:#fff;border:1px solid var(--border-strong);border-radius:12px;text-decoration:none;color:var(--ink);font-weight:700;">
+    🎾 단식 대회 전체
+  </a>
+  <a class="btn secondary" href="{{ url_for('tournament_list_page', format='doubles') }}"
+     style="flex:1;text-align:center;padding:14px;background:#fff;border:1px solid var(--border-strong);border-radius:12px;text-decoration:none;color:var(--ink);font-weight:700;">
+    🎾 복식 대회 전체
+  </a>
+</div>
+{% endif %}
 
 {% if not active_org %}
 <h2>주최자 카테고리</h2>

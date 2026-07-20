@@ -534,27 +534,89 @@ h2::before { content: ""; width: 7px; height: 20px; border-radius: 4px; backgrou
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
+/* ---------- 홈 아이콘 아래 편의 기능 카드 (상대분석 + 게임) ---------- */
+.mini-features {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+  margin: 0 0 24px;
+}
+@media (max-width: 500px) {
+  .mini-features { grid-template-columns: 1fr; }
+}
+.mini-feature-card {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 16px; background: #fff;
+  border-radius: 14px; border: 1px solid var(--border);
+  box-shadow: var(--shadow-xs); text-decoration: none;
+  transition: all .22s var(--ease-spring);
+  cursor: pointer;
+}
+.mini-feature-card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-md);
+  border-color: transparent;
+}
+.mini-feature-card.analyze { border-left: 4px solid #667eea; }
+.mini-feature-card.analyze:hover {
+  background: linear-gradient(135deg, #f0f2ff 0%, #f8fafd 100%);
+}
+.mini-feature-card.game { border-left: 4px solid #10b981; }
+.mini-feature-card.game:hover {
+  background: linear-gradient(135deg, #ecfdf5 0%, #f8fafd 100%);
+}
+.mini-feature-icon {
+  font-size: 28px; line-height: 1; flex-shrink: 0;
+}
+.mini-feature-text {
+  display: flex; flex-direction: column; gap: 2px; min-width: 0;
+}
+.mini-feature-text strong {
+  font-size: 14px; font-weight: 800; color: var(--ink);
+}
+.mini-feature-text span {
+  font-size: 11px; color: var(--ink-faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
 /* ---------- Calendar ---------- */
 .calendar-grid {
-  display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px;
+  display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-auto-rows: 110px;   /* 모든 행 동일 높이 강제 */
+  gap: 1px;
   background: var(--border); border: 1px solid var(--border); border-radius: var(--radius-sm);
   overflow: hidden; box-shadow: var(--shadow-xs);
 }
 .calendar-weekday {
   background: var(--surface-2); text-align: center; padding: 10px 0; font-size: 12px;
   font-weight: 800; color: var(--ink-faint);
+  grid-row: auto;   /* weekday는 auto height */
+}
+.calendar-grid .calendar-weekday-row {
+  display: contents;
 }
 .calendar-cell {
-  background: var(--surface); min-height: 96px; padding: 8px; display: flex; flex-direction: column; gap: 4px;
+  background: var(--surface); padding: 6px 6px 4px; display: flex; flex-direction: column; gap: 3px;
   transition: background .25s var(--ease);
+  min-height: 0;   /* 그리드가 정한 크기 준수 */
+  height: 100%;    /* row 크기 그대로 */
+  overflow: hidden;    /* 넘치면 잘림 (아래 events가 스크롤) */
 }
 .calendar-cell:hover { background: var(--surface-2); }
 .calendar-cell.other-month { background: var(--bg); }
 .calendar-cell.other-month .calendar-date { color: var(--ink-faint); }
 .calendar-cell.today { background: var(--primary-wash); }
-.calendar-date-row { display: flex; justify-content: space-between; align-items: center; }
-.calendar-date { font-size: 13px; font-weight: 700; color: var(--ink-soft); }
+.calendar-date-row { display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
+.calendar-date { font-size: 12px; font-weight: 700; color: var(--ink-soft); }
 .calendar-cell.today .calendar-date { color: var(--primary); }
+.calendar-events {
+  display: flex; flex-direction: column; gap: 2px;
+  flex: 1; min-height: 0; overflow-y: auto;
+}
+.calendar-events::-webkit-scrollbar { width: 3px; }
+.calendar-events::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
+@media (max-width: 640px) {
+  .calendar-grid { grid-auto-rows: 78px; }
+  .calendar-date { font-size: 11px; }
+}
 .calendar-add {
   width: 18px; height: 18px; border-radius: 50%; background: var(--surface-2); color: var(--ink-soft);
   display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 800;

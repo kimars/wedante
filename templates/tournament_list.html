@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}대회 전체 · 위단테{% endblock %}
+{% block content %}
+<span class="eyebrow">All Tournaments</span>
+<h1>대회 목록</h1>
+
+<div class="format-tabs">
+  <a class="format-tab {% if current_format == 'singles' %}active{% endif %}"
+     href="{{ url_for('tournament_list_page', format='singles') }}">🎾 단식</a>
+  <a class="format-tab {% if current_format == 'doubles' %}active{% endif %}"
+     href="{{ url_for('tournament_list_page', format='doubles') }}">🎾🎾 복식</a>
+</div>
+
+<p style="font-size:13px;color:var(--ink-faint);margin:0 0 16px;">
+  최신 대회부터 날짜 순서대로 표시됩니다. ({{ tournaments|length }}개)
+</p>
+
+<div class="tournament-list">
+  {% for t in tournaments %}
+  <a class="tournament-item" href="{{ url_for('tournament_page', tid=t.id) }}"
+     style="animation-delay:{{ loop.index0 * 0.04 }}s">
+    <div>
+      <strong>{{ t.title }}</strong>
+      <div class="meta">
+        {{ t.event_date or '날짜 미정' }} · {{ t.location or '장소 미정' }} · 참가비 {{ "{:,}".format(t.entry_fee) }}원
+        {% if t.winner_id %}
+          · <span style="color:var(--primary);font-weight:700;">🏆 우승자 있음</span>
+        {% endif %}
+      </div>
+    </div>
+    <span class="badge {% if t.status in ['접수마감','종료'] %}closed{% elif t.status == '진행중' %}live{% endif %}">{{ t.status }}</span>
+  </a>
+  {% else %}
+  <div class="card" style="text-align:center;padding:40px 20px;">
+    <p style="color:var(--ink-faint);margin:0;">
+      {{ '단식' if current_format == 'singles' else '복식' }} 대회가 아직 없습니다.
+    </p>
+  </div>
+  {% endfor %}
+</div>
+
+<style>
+.format-tabs {
+  display: flex; gap: 8px; margin: 0 0 20px;
+  border-bottom: 2px solid var(--border);
+}
+.format-tab {
+  padding: 12px 24px; text-decoration: none;
+  color: var(--ink-faint); font-weight: 700; font-size: 15px;
+  border-bottom: 3px solid transparent; margin-bottom: -2px;
+  transition: all .2s var(--ease);
+}
+.format-tab:hover { color: var(--ink); }
+.format-tab.active {
+  color: var(--primary); border-bottom-color: var(--primary);
+}
+</style>
+{% endblock %}

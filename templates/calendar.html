@@ -25,9 +25,11 @@
         <a class="calendar-add" href="{{ url_for('new_tournament', date=d.isoformat()) }}" title="이 날짜로 대회 만들기">+</a>
         {% endif %}
       </div>
-      {% for t in by_date.get(d.isoformat(), []) %}
-      <a class="calendar-chip status-{{ t.status }}" href="{{ url_for('tournament_page', tid=t.id) }}">{{ t.title }}</a>
-      {% endfor %}
+      <div class="calendar-events">
+        {% for t in by_date.get(d.isoformat(), []) %}
+        <a class="calendar-chip status-{{ t.status }}" href="{{ url_for('tournament_page', tid=t.id) }}">{{ t.title }}</a>
+        {% endfor %}
+      </div>
     </div>
     {% endfor %}
   {% endfor %}

@@ -882,12 +882,39 @@ def advance_winner(match: Match):
 
 @app.route("/")
 def index():
+    """홈 - 진행중 대회 (오늘 event_date) + 접수중 대회 를 각각 표시"""
+    today_kst = datetime.now(KST).strftime("%Y-%m-%d")
     organizers = Organizer.query.all()
-    tournaments = Tournament.query.order_by(Tournament.event_date.desc()).limit(20).all()
+
+    # 진행중: 오늘 열리는 대회 (status = 진행중 이거나 event_date == 오늘)
+    live_tournaments = (Tournament.query
+                        .filter((Tournament.event_date == today_kst) | (Tournament.status == "진행중"))
+                        .order_by(Tournament.event_date.desc()).limit(20).all())
+    # 접수중: 미래 대회 중 접수중 (오늘 아직 안 열린 것)
+    open_tournaments = (Tournament.query
+                        .filter(Tournament.status == "접수중")
+                        .filter((Tournament.event_date == None) | (Tournament.event_date >= today_kst))
+                        .order_by(Tournament.event_date.asc().nullslast()).limit(20).all())
+
     banners = Banner.query.filter_by(is_active=True).order_by(Banner.sort_order, Banner.id).all()
     icons = QuickIcon.query.filter_by(is_active=True).order_by(QuickIcon.sort_order, QuickIcon.id).limit(9).all()
-    return render_template("index.html", organizers=organizers, tournaments=tournaments,
+    return render_template("index.html", organizers=organizers,
+                            live_tournaments=live_tournaments,
+                            open_tournaments=open_tournaments,
                             banners=banners, icons=icons)
+
+
+@app.route("/tournaments")
+def tournament_list_page():
+    """대회 전체 페이지 - 단식/복식 탭으로 분리. 각 탭은 날짜순 정렬."""
+    fmt = request.args.get("format", "singles")
+    if fmt not in ("singles", "doubles"):
+        fmt = "singles"
+    tournaments = (Tournament.query
+                   .filter(Tournament.format == fmt)
+                   .order_by(Tournament.event_date.desc().nullslast(), Tournament.id.desc())
+                   .all())
+    return render_template("tournament_list.html", tournaments=tournaments, current_format=fmt)
 
 
 @app.route("/org/<slug>")
@@ -895,7 +922,10 @@ def organizer_page(slug):
     org = Organizer.query.filter_by(slug=slug).first_or_404()
     tournaments = Tournament.query.filter_by(organizer_id=org.id).order_by(
         Tournament.event_date.desc()).all()
-    return render_template("index.html", organizers=[org], tournaments=tournaments,
+    # 주최자별 페이지는 기존 tournaments 리스트를 그대로 사용 (변경 없음)
+    return render_template("index.html", organizers=[org],
+                            live_tournaments=tournaments,
+                            open_tournaments=[],
                             active_org=org, banners=[], icons=[])
 
 
@@ -1587,6 +1617,47 @@ def _schedule_next_match_notification(match: Match):
     return
 
 
+@app.route("/api/matches/<int:mid>/reset", methods=["POST"])
+@login_required
+def api_reset_match(mid):
+    """실수로 진행중/종료로 표시한 경기를 '경기전' 상태로 되돌린다.
+    - status = '시작전', started_at = None
+    - 종료된 경기라면 score/winner도 지워짐 → 다음 매치에 배치했던 승자/패자도 되돌려짐
+    - 관리자만 가능"""
+    m = Match.query.get_or_404(mid)
+    if not can_manage_tournament(current_user, m.tournament):
+        abort(403)
+
+    was_ended = (m.status == "종료")
+    prev_winner_id = m.winner_id
+
+    m.status = "시작전"
+    m.started_at = None
+    m.score = None
+    m.winner_id = None
+
+    # 종료였다면 dependent 매치들(다음 경기의 승자/패자 슬롯)도 되돌림
+    if was_ended:
+        dependents = Match.query.filter_by(
+            tournament_id=m.tournament_id, stage="prelim", source_match_id=m.id
+        ).all()
+        for d in dependents:
+            # 이 매치의 승자/패자가 dependent 매치의 slot1에 배치돼있었으면 되돌림
+            if d.player1_id == prev_winner_id and d.source_role == "winner":
+                d.player1_id = None
+                d.player1_partner_id = None
+            # source_role == "loser" 인 경우도 마찬가지
+            loser_id = m.player2_id if prev_winner_id == m.player1_id else m.player1_id
+            if d.player1_id == loser_id and d.source_role == "loser":
+                d.player1_id = None
+                d.player1_partner_id = None
+
+    db.session.commit()
+    socketio.emit("bracket_update", {"tournament_id": m.tournament_id},
+                   room=f"tournament_{m.tournament_id}")
+    return jsonify({"ok": True})
+
+
 @app.route("/api/matches/<int:mid>/start", methods=["POST"])
 @login_required
 def api_start_match(mid):
@@ -1601,7 +1672,7 @@ def api_start_match(mid):
         db.session.commit()
     socketio.emit("bracket_update", {"tournament_id": m.tournament_id},
                    room=f"tournament_{m.tournament_id}")
-    return jsonify({"ok": True, "started_at": m.started_at.isoformat() if m.started_at else None})
+    return jsonify({"ok": True, "started_at": m.started_at.replace(tzinfo=timezone.utc).isoformat() if m.started_at else None})
 
 
 @app.route("/api/matches/<int:mid>/score", methods=["POST"])
@@ -1682,7 +1753,7 @@ def api_get_draw(tid):
             "winner_id": m.winner_id,
             "court": m.court, "court_seq": m.court_seq,
             "scheduled_time": m.scheduled_time,
-            "started_at": m.started_at.isoformat() if m.started_at else None,
+            "started_at": m.started_at.replace(tzinfo=timezone.utc).isoformat() if m.started_at else None,
             "duration_min": m.duration_min or 20,
             "source_match_id": m.source_match_id,
             "source_role": m.source_role,

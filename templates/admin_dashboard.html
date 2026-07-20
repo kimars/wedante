@@ -20,7 +20,7 @@
 
 <h2>1. 예선 대진표 생성</h2>
 <div class="card">
-  <p style="font-size:13px;color:var(--ink-soft);">참가자를 선택하고 조를 생성하면 조별 라운드로빈 경기와 본선 빈 대진표가 자동으로 만들어집니다.</p>
+  <p style="font-size:13px;color:var(--ink-soft);">참가자를 선택하고 조를 생성하면 조별 예선 경기(3명 승자결정전)와 본선 빈 대진표가 자동으로 만들어집니다. 조 1위와 2위가 본선에 진출합니다.</p>
   <div style="max-height:180px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:10px;margin:10px 0;">
     {% for p in players %}
     <label style="display:flex;align-items:center;font-size:14px;padding:3px 0;gap:8px;">
@@ -77,7 +77,11 @@
   <div id="prelim-admin-list"></div>
 </div>
 
-<h2>4. 조별 우승자 확정 → 본선 자동 반영</h2>
+<h2>4. 조별 1,2위 확정 → 본선 자동 반영</h2>
+<p style="font-size:13px;color:var(--ink-soft);margin:-8px 0 12px;">
+  각 조의 모든 경기가 종료되면 <strong>승수 기준(동률 시 상대전적)</strong>으로 1위/2위가 자동 결정되어 본선에 배치됩니다.
+  아래는 수동 재확정용 UI (조 순위 결과 미반영 시).
+</p>
 <div class="card">
   <div id="group-winners-list"><p>생성된 조가 없습니다.</p></div>
 </div>
@@ -359,7 +363,7 @@ function generateDraw() {
     if (manual.length === 0) { toast("최소 1개의 조가 필요합니다.", "error"); return; }
     body.manual_groups = manual;
   }
-  const confirmMsg = "기존 대진표와 조 우승자 반영 결과가 초기화됩니다. 진행하시겠습니까?";
+  const confirmMsg = "기존 대진표와 조 1,2위 진출자 반영 결과가 초기화됩니다. 진행하시겠습니까?";
   if (document.querySelector("#prelim-admin-list div") && !confirm(confirmMsg)) return;
   withLoading(btn, () =>
     apiPost(`/api/tournaments/${TID}/draw/generate`, body)
@@ -371,10 +375,10 @@ function generateDraw() {
 function setGroupWinner(gno) {
   const sel = document.getElementById(`group-winner-${gno}`);
   const btn = event.target;
-  if (!sel.value) { toast("우승자를 선택해주세요.", "error"); return; }
+  if (!sel.value) { toast("1위 선수를 선택해주세요.", "error"); return; }
   withLoading(btn, () =>
     apiPost(`/api/tournaments/${TID}/groups/${gno}/winner`, {winner_id: parseInt(sel.value)})
-      .then(() => { toast(`${gno}조 우승자가 본선에 반영되었습니다.`, "success"); loadDraw(); })
+      .then(() => { toast(`${gno}조 1위가 본선에 반영되었습니다.`, "success"); loadDraw(); })
       .catch((err) => toast(err.message, "error"))
   );
 }
@@ -502,7 +506,7 @@ function renderGroupWinners(prelimMatches) {
   }
   el.innerHTML = groupNos.map(gno => `
     <div class="card-row" style="margin-bottom:8px;">
-      <span>${gno}조 우승자</span>
+      <span>${gno}조 1위 · 2위</span>
       <select id="group-winner-${gno}"></select>
       <button class="secondary" onclick="setGroupWinner(${gno})">확정</button>
     </div>`).join("");
@@ -601,7 +605,7 @@ function renderMainAdmin(matches) {
     const bothSet = !!(m.player1_id && m.player2_id);
     return `
     <div class="card-row" style="border-bottom:1px solid var(--border);padding:8px 0;flex-wrap:wrap;${bothSet ? '' : 'opacity:.7;'}">
-      <span><strong style="color:var(--primary);">${m.round_name || ''}</strong>${m.match_no ? ' #' + m.match_no : ''} · ${p1} vs ${p2}${bothSet ? '' : ' <span style="color:var(--ink-faint);font-size:12px;">(조 우승자 확정 대기)</span>'}</span>
+      <span><strong style="color:var(--primary);">${m.round_name || ''}</strong>${m.match_no ? ' #' + m.match_no : ''} · ${p1} vs ${p2}${bothSet ? '' : ' <span style="color:var(--ink-faint);font-size:12px;">(예선 1,2위 확정 대기)</span>'}</span>
       <span style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
         <input placeholder="코트" id="mcourt-${m.id}" style="width:56px;padding:6px;border:1px solid var(--border-strong);border-radius:8px;" value="${m.court || ''}">
         <input placeholder="시간 09:00" id="mtime-${m.id}" style="width:78px;padding:6px;border:1px solid var(--border-strong);border-radius:8px;" value="${m.scheduled_time || ''}">
