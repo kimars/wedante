@@ -1945,22 +1945,34 @@ import click
 @click.option("--count", default=40, show_default=True, help="생성할 테스트 계정 수")
 @click.option("--format", "fmt", default="singles",
               type=click.Choice(["singles", "doubles"]), show_default=True)
-@click.option("--auto-draw", is_flag=True, default=False,
-              help="자동으로 참가 신청 → 확정 → 예선 대진표까지 생성")
+@click.option("--tid", type=int, default=None,
+              help="기존 대회 ID. 지정하면 새 대회를 만들지 않고 이 대회에 테스트 계정들을 참가시킵니다.")
+@click.option("--skip-draw", is_flag=True, default=False,
+              help="참가 신청까지만 하고 예선 대진표는 생성하지 않음")
 @click.option("--start-time", default=None,
-              help="대회 시작 시각 HH:MM. 미지정 시 오늘로부터 30분 뒤로 자동 설정(SMS 예약 실동작 확인용)")
-@click.option("--event-date", default=None, help="대회 날짜 YYYY-MM-DD. 미지정 시 오늘")
-def seed_test(count, fmt, auto_draw, start_time, event_date):
-    """테스트용 계정과 대회를 한 번에 만든다.
+              help="새 대회 시작 시각 HH:MM. 미지정 시 오늘로부터 30분 뒤로 자동 설정")
+@click.option("--event-date", default=None, help="새 대회 날짜 YYYY-MM-DD. 미지정 시 오늘")
+def seed_test(count, fmt, tid, skip_draw, start_time, event_date):
+    """테스트용 계정과 대회를 한 번에 만들거나, 기존 대회에 테스트 계정을 참가시킨다.
 
-    실행: flask --app app seed-test --count 40 --format singles --auto-draw
+    실행 예시:
+
+    - 계정 40명 만들고 새 대회에 자동 참가 + 예선 대진표까지 (기본):
+      flask --app app seed-test
+
+    - 이미 만들어진 대회(예: ID=5)에 테스트 계정 40명 참가시키기:
+      flask --app app seed-test --tid 5
+
+    - 복식 대회로:
+      flask --app app seed-test --format doubles
+
+    - 참가만 시키고 예선 대진표는 안 만들기:
+      flask --app app seed-test --skip-draw
 
     생성물:
-    - 테스트 최고관리자: 01099990001 / test1234
-    - 테스트 관리자(대회 소유자): 01099990002 / test1234
-    - 테스트 선수 계정: 01099990003 ~ 01099990{2+count} / 비밀번호 모두 test1234
-    - 대회 하나 (기본: 오늘 날짜, 30분 후 시작)
-    - --auto-draw 시 참가 신청 → 확정 → 예선 대진표까지 자동 생성
+    - 최고 관리자: 01099990001 / test1234
+    - 대회 관리자: 01099990002 / test1234
+    - 선수 계정:   01099990003 ~ 01099990{2+count} / test1234
     """
     from datetime import datetime as _dt, timedelta as _td
 
@@ -1997,7 +2009,7 @@ def seed_test(count, fmt, auto_draw, start_time, event_date):
         creator.set_password("test1234")
         db.session.add(creator); db.session.commit()
 
-    # 4. 테스트 선수 계정 count 명
+    # 4. 테스트 선수 계정 count 명 (idempotent)
     created = 0
     players = []
     for i in range(count):
@@ -2014,110 +2026,163 @@ def seed_test(count, fmt, auto_draw, start_time, event_date):
             created += 1
         players.append(phone)
     db.session.commit()
+    click.echo(f"신규 사용자: {created}명 (기존 {count - created}명은 유지)")
 
-    # 5. 대회 하나 만들기
-    now = _dt.now(KST)
-    if not event_date:
-        event_date = now.strftime("%Y-%m-%d")
-    if not start_time:
-        # 지금으로부터 30분 뒤 시각 (SMS는 10분 뒤에 발송 시작)
-        target = now + _td(minutes=30)
-        # 30분 단위로 반올림 (:00 또는 :30)
-        minute = 30 if target.minute >= 30 else 0
-        target = target.replace(minute=minute, second=0, microsecond=0)
-        if minute == 0 and target.minute == 0 and target < now + _td(minutes=25):
-            target += _td(hours=1)
-        start_time = target.strftime("%H:%M")
+    # 5. 대회 확보: --tid 지정 시 기존 대회, 아니면 새 대회 생성
+    if tid:
+        t = Tournament.query.get(tid)
+        if not t:
+            click.echo(f"❌ 대회 ID={tid} 를 찾을 수 없습니다.")
+            return
+        click.echo(f"✓ 기존 대회에 참가시킵니다: [{t.id}] {t.title}")
+        # 대회 종목이 CLI 옵션과 다르면 안내
+        if t.format != fmt:
+            click.echo(f"  ⚠ 대회 종목({t.format})이 CLI 옵션({fmt})과 다릅니다. 대회 종목을 따릅니다.")
+            fmt = t.format
+    else:
+        now = _dt.now(KST)
+        if not event_date:
+            event_date = now.strftime("%Y-%m-%d")
+        if not start_time:
+            target = now + _td(minutes=30)
+            minute = 30 if target.minute >= 30 else 0
+            target = target.replace(minute=minute, second=0, microsecond=0)
+            if minute == 0 and target < now + _td(minutes=25):
+                target += _td(hours=1)
+            start_time = target.strftime("%H:%M")
 
-    title = f"테스트 대회 ({now.strftime('%m/%d %H:%M')} 생성)"
-    t = Tournament(
-        organizer_id=org.id, title=title,
-        location="테스트 코트", event_date=event_date,
-        entry_fee=0,                   # 무료 (즉시 확정 처리 위해)
-        format=fmt, group_size=3,
-        start_time=start_time, match_interval_min=30,
-        status="접수중",
-        created_by_id=creator.id,
-    )
-    db.session.add(t); db.session.commit()
+        title = f"테스트 대회 ({now.strftime('%m/%d %H:%M')} 생성)"
+        t = Tournament(
+            organizer_id=org.id, title=title,
+            location="테스트 코트", event_date=event_date,
+            entry_fee=0, format=fmt, group_size=3,
+            start_time=start_time, match_interval_min=30,
+            status="접수중", created_by_id=creator.id,
+        )
+        db.session.add(t); db.session.commit()
+        click.echo(f"✓ 새 대회 생성: [{t.id}] {title}")
+        click.echo(f"  · 날짜: {event_date}  · 첫 경기: {start_time}  · 종목: {'단식' if fmt == 'singles' else '복식'}")
 
-    click.echo(f"\n{'='*60}")
-    click.echo("✅ 테스트 데이터 생성 완료")
-    click.echo(f"{'='*60}")
-    click.echo(f"신규 사용자: {created}명 (기존 계정은 유지)")
-    click.echo(f"전체 테스트 계정: {count}명")
-    click.echo(f"")
-    click.echo(f"🔑 로그인 정보 (비밀번호는 모두 test1234)")
-    click.echo(f"  - 최고 관리자: 01099990001 / test1234")
-    click.echo(f"  - 대회 관리자: 01099990002 / test1234")
-    click.echo(f"  - 선수 1번:   01099990003 / test1234")
-    click.echo(f"  - 선수 2번:   01099990004 / test1234")
-    click.echo(f"  - ...")
-    click.echo(f"  - 선수 {count}번: 010999900{count+2:02d} / test1234")
-    click.echo(f"")
-    click.echo(f"🏆 생성된 대회: {title}")
-    click.echo(f"  - 대회 ID:    {t.id}")
-    click.echo(f"  - 종목:       {'단식' if fmt == 'singles' else '복식'}")
-    click.echo(f"  - 날짜:       {event_date}")
-    click.echo(f"  - 첫 경기:    {start_time}")
-    click.echo(f"  - 상태:       {t.status}")
-    click.echo(f"  - URL:        /tournament/{t.id}")
-
-    # 6. --auto-draw 옵션: 자동으로 신청 + 확정 + 예선 생성
-    if auto_draw:
-        click.echo(f"\n[auto-draw] 참가 신청 자동 처리...")
-        # 참가비 0원이므로 즉시 확정 상태로 등록
-        applied = 0
-        applied_users = []
-        for phone in players:
-            u = User.query.filter_by(phone=phone).first()
-            if not u:
-                continue
-            if TournamentParticipant.query.filter_by(
-                tournament_id=t.id, user_id=u.id
-            ).first():
-                continue
-            p = TournamentParticipant(
-                tournament_id=t.id, user_id=u.id, status="확정",
-                confirmed_at=datetime.utcnow()
-            )
-            db.session.add(p)
-            applied += 1
+    # 6. 모든 테스트 계정을 이 대회에 참가시킨다 (idempotent - 이미 참가한 계정은 스킵)
+    #    api_apply_tournament 를 우회하고 직접 삽입: 대회 상태(접수마감/진행중/종료)와 무관하게 강제 참가
+    click.echo(f"\n[참가 신청] 테스트 계정 {count}명을 대회에 참가시킵니다...")
+    already, applied = 0, 0
+    applied_users = []
+    for phone in players:
+        u = User.query.filter_by(phone=phone).first()
+        if not u:
+            continue
+        existing = TournamentParticipant.query.filter_by(
+            tournament_id=t.id, user_id=u.id
+        ).first()
+        if existing:
+            # 이미 참가 - 상태를 확정으로 승격
+            if existing.status != "확정":
+                existing.status = "확정"
+                existing.confirmed_at = datetime.utcnow()
+            already += 1
             applied_users.append(u)
-        db.session.commit()
-        click.echo(f"  ✓ {applied}명 신청+확정 처리")
+            continue
+        p = TournamentParticipant(
+            tournament_id=t.id, user_id=u.id, status="확정",
+            confirmed_at=datetime.utcnow()
+        )
+        db.session.add(p)
+        applied += 1
+        applied_users.append(u)
+    db.session.commit()
+    click.echo(f"  ✓ 신규 참가 {applied}명 + 기존 참가 {already}명 = 총 {applied + already}명 확정 상태")
 
-        # 복식이면 자동 페어링
+    # 7. 복식이면 자동 페어링 (이미 파트너 있는 계정은 유지)
+    if fmt == "doubles":
+        parts = (TournamentParticipant.query
+                 .filter_by(tournament_id=t.id)
+                 .order_by(TournamentParticipant.id).all())
+        # 아직 파트너 없는 참가자만 2명씩 짝짓기
+        unpaired = [p for p in parts if not p.partner_id]
+        pair_count = 0
+        for i in range(0, len(unpaired) - 1, 2):
+            unpaired[i].partner_id = unpaired[i+1].user_id
+            unpaired[i+1].partner_id = unpaired[i].user_id
+            pair_count += 1
+        db.session.commit()
+        if pair_count > 0:
+            click.echo(f"  ✓ 복식 팀 자동 페어링: {pair_count}팀 신규 편성")
+
+    # 8. 예선 대진표 생성 (--skip-draw 아닐 때)
+    if not skip_draw:
+        # 기존 예선 매치가 있으면 재생성 여부 확인
+        existing_prelim = Match.query.filter_by(tournament_id=t.id, stage="prelim").count()
+        if existing_prelim:
+            click.echo(f"\n⚠ 이 대회에 이미 예선 매치가 {existing_prelim}개 있습니다.")
+            if not click.confirm("삭제하고 다시 생성할까요? (No 선택 시 참가 신청까지만 유지)", default=False):
+                click.echo("예선 대진표는 유지합니다.")
+                _print_summary(t, applied_users, count)
+                return
+            # 기존 매치 + 예약 SMS 삭제
+            match_ids = [m.id for m in Match.query.filter_by(tournament_id=t.id).all()]
+            if match_ids:
+                CallLog.query.filter(CallLog.match_id.in_(match_ids)).update({"match_id": None}, synchronize_session=False)
+            ScheduledSms.query.filter_by(tournament_id=t.id).delete(synchronize_session=False)
+            Match.query.filter_by(tournament_id=t.id).delete(synchronize_session=False)
+            db.session.commit()
+            click.echo(f"  ✓ 기존 예선 매치 {existing_prelim}개 삭제")
+
+        # 예선용 선수(팀 대표) 목록
         if fmt == "doubles":
             parts = TournamentParticipant.query.filter_by(tournament_id=t.id).order_by(TournamentParticipant.id).all()
-            # 2명씩 짝지음
-            for i in range(0, len(parts) - 1, 2):
-                parts[i].partner_id = parts[i+1].user_id
-                parts[i+1].partner_id = parts[i].user_id
-            db.session.commit()
-            click.echo(f"  ✓ 복식 팀 자동 페어링 ({len(parts)//2}팀)")
-            # 예선용 팀 대표 목록
-            team_leads = [parts[i].user_id for i in range(0, len(parts) - 1, 2)]
-            player_ids_for_draw = team_leads
+            # 대표는 pair 별 첫 번째만 (partner 관계에서 id가 더 작은 쪽만 대표로)
+            reps = []
+            seen = set()
+            for p in parts:
+                if p.user_id in seen:
+                    continue
+                if p.partner_id:
+                    reps.append(p.user_id)
+                    seen.add(p.user_id)
+                    seen.add(p.partner_id)
+            player_ids_for_draw = reps
         else:
             player_ids_for_draw = [u.id for u in applied_users]
 
-        # 예선 대진표 생성
-        click.echo(f"  ⏳ 예선 대진표 생성 중...")
+        if len(player_ids_for_draw) < 2:
+            click.echo(f"❌ 대진표를 만들려면 최소 2명(팀) 필요합니다. 현재: {len(player_ids_for_draw)}")
+            return
+
+        click.echo(f"\n[대진표] {len(player_ids_for_draw)}{'팀' if fmt=='doubles' else '명'} 예선 대진표 생성 중...")
         generate_prelim_groups(t, player_ids_for_draw)
 
         prelim_count = Match.query.filter_by(tournament_id=t.id, stage="prelim").count()
-        court_count = len(set(m.court for m in Match.query.filter_by(tournament_id=t.id, stage="prelim").all() if m.court))
+        court_ids = set(m.court for m in Match.query.filter_by(tournament_id=t.id, stage="prelim").all() if m.court)
         sms_count = ScheduledSms.query.filter_by(tournament_id=t.id, sent=False).count()
+        click.echo(f"  ✓ 예선 매치 {prelim_count}건, 코트 {len(court_ids)}개, SMS 예약 {sms_count}건")
 
-        click.echo(f"  ✓ 예선 매치 {prelim_count}건, 코트 {court_count}개, SMS 예약 {sms_count}건")
-        click.echo(f"\n대회 상태를 '진행중'으로 변경합니다...")
-        t.status = "진행중"
-        db.session.commit()
+        # 대회 상태를 진행중으로
+        if t.status == "접수중":
+            t.status = "진행중"
+            db.session.commit()
+            click.echo(f"  ✓ 대회 상태를 '진행중'으로 변경")
 
+    _print_summary(t, applied_users, count)
+
+
+def _print_summary(t, applied_users, count):
+    """seed-test 결과 요약 출력"""
     click.echo(f"\n{'='*60}")
-    click.echo(f"👉 홈에서 확인: /tournament/{t.id}")
-    click.echo(f"👉 관리 대시보드: /admin/tournament/{t.id}")
+    click.echo("✅ 완료")
+    click.echo(f"{'='*60}")
+    click.echo(f"🔑 로그인 정보 (비밀번호 모두 test1234)")
+    click.echo(f"  - 최고 관리자: 01099990001")
+    click.echo(f"  - 대회 관리자: 01099990002")
+    click.echo(f"  - 선수 1번:   01099990003")
+    click.echo(f"  - 선수 N번:   010999900{count+2:02d}  ← 마지막 계정")
+    click.echo(f"")
+    click.echo(f"🏆 대회: {t.title}")
+    click.echo(f"  - ID:       {t.id}")
+    click.echo(f"  - 상태:     {t.status}")
+    click.echo(f"  - 참가자:   {len(applied_users)}명 (모두 확정)")
+    click.echo(f"  - URL:      /tournament/{t.id}")
+    click.echo(f"  - 관리:     /admin/tournament/{t.id}")
     click.echo(f"{'='*60}\n")
 
 
