@@ -2485,6 +2485,147 @@ def clear_test(yes):
     click.echo(f"✓ 테스트 데이터 정리 완료")
 
 
+@app.cli.command("delete-user")
+@click.argument("phones", nargs=-1, required=True)
+@click.option("--yes", is_flag=True, default=False, help="확인 프롬프트 건너뛰기")
+def delete_user(phones, yes):
+    """전화번호로 특정 사용자 계정과 관련 데이터를 삭제한다.
+
+    실행 예시:
+      flask --app app delete-user 01012345678
+      flask --app app delete-user 01011111111 01022222222   (여러 명)
+      flask --app app delete-user 01012345678 --yes         (확인 없이)
+
+    함께 삭제되는 데이터:
+      - 대회 참가 이력, 콜 + 답장, 환불 요청/메시지, 문자 로그, 예약된 문자, 전화 인증 토큰
+      - 이 사용자가 만든 대회는 유지 (created_by_id 만 NULL 처리)
+      - 최고 관리자(is_superadmin) 계정은 안전을 위해 삭제 거부"""
+    if not phones:
+        click.echo("전화번호를 하나 이상 지정하세요.")
+        return
+
+    # 하이픈/공백 제거해서 정규화
+    def normalize(p):
+        return "".join(ch for ch in (p or "") if ch.isdigit())
+
+    targets = []
+    not_found = []
+    protected = []
+    for raw in phones:
+        norm = normalize(raw)
+        u = User.query.filter_by(phone=norm).first()
+        if not u:
+            not_found.append(raw)
+            continue
+        if u.is_superadmin:
+            protected.append(u)
+            continue
+        targets.append(u)
+
+    if not_found:
+        click.echo(f"⚠ 찾을 수 없는 전화번호: {', '.join(not_found)}")
+    if protected:
+        click.echo(f"⚠ 최고 관리자(is_superadmin) 계정이라 삭제 불가:")
+        for u in protected:
+            click.echo(f"    - {u.name} ({u.phone})")
+
+    if not targets:
+        click.echo("삭제할 대상이 없습니다.")
+        return
+
+    click.echo(f"\n[삭제 대상] {len(targets)}명")
+    for u in targets:
+        parts_count = TournamentParticipant.query.filter_by(user_id=u.id).count()
+        calls_count = CallLog.query.filter_by(user_id=u.id).count()
+        refunds_count = RefundRequest.query.filter_by(user_id=u.id).count()
+        created_tournaments = Tournament.query.filter_by(created_by_id=u.id).count()
+        click.echo(f"  - {u.name} ({u.phone})"
+                    f" · 참가:{parts_count}건 · 콜:{calls_count}건 · 환불:{refunds_count}건"
+                    f"{' · 생성대회:' + str(created_tournaments) + '건(유지됨)' if created_tournaments else ''}")
+
+    if not yes:
+        click.confirm("\n정말로 위 계정을 삭제할까요? (되돌릴 수 없음)", abort=True)
+
+    for u in targets:
+        uid = u.id
+        # 참가자 이력 (파트너 관계 정리 포함)
+        # 이 사용자가 파트너로 지정된 다른 참가자 정보를 NULL 처리
+        TournamentParticipant.query.filter_by(partner_id=uid).update(
+            {"partner_id": None}, synchronize_session=False)
+        # 이 사용자의 참가 이력 삭제
+        TournamentParticipant.query.filter_by(user_id=uid).delete(synchronize_session=False)
+
+        # 콜 답장 → 콜 → 그 순서로
+        my_calls = CallLog.query.filter_by(user_id=uid).all()
+        for c in my_calls:
+            CallReply.query.filter_by(call_id=c.id).delete(synchronize_session=False)
+        # 이 사용자가 남긴 다른 콜의 답장
+        CallReply.query.filter_by(sender_id=uid).delete(synchronize_session=False)
+        CallLog.query.filter_by(user_id=uid).delete(synchronize_session=False)
+
+        # 환불 요청/메시지
+        my_refunds = RefundRequest.query.filter_by(user_id=uid).all()
+        for r in my_refunds:
+            RefundMessage.query.filter_by(refund_request_id=r.id).delete(synchronize_session=False)
+        # 이 사용자가 남긴 다른 환불의 메시지
+        RefundMessage.query.filter_by(sender_id=uid).delete(synchronize_session=False)
+        RefundRequest.query.filter_by(user_id=uid).delete(synchronize_session=False)
+
+        # 문자 로그, 예약 문자, 전화 인증 토큰
+        SmsLog.query.filter_by(user_id=uid).delete(synchronize_session=False)
+        ScheduledSms.query.filter_by(user_id=uid).delete(synchronize_session=False)
+        PhoneVerification.query.filter_by(phone=u.phone).delete(synchronize_session=False)
+
+        # 매치 슬롯에서 이 사용자 흔적 제거 (경기 결과 보존 위해 이름만 NULL 처리)
+        Match.query.filter_by(player1_id=uid).update({"player1_id": None}, synchronize_session=False)
+        Match.query.filter_by(player2_id=uid).update({"player2_id": None}, synchronize_session=False)
+        Match.query.filter_by(winner_id=uid).update({"winner_id": None}, synchronize_session=False)
+        Match.query.filter_by(player1_partner_id=uid).update({"player1_partner_id": None}, synchronize_session=False)
+        Match.query.filter_by(player2_partner_id=uid).update({"player2_partner_id": None}, synchronize_session=False)
+
+        # 이 사용자가 만든 대회는 유지하되 created_by_id 만 NULL
+        Tournament.query.filter_by(created_by_id=uid).update(
+            {"created_by_id": None}, synchronize_session=False)
+        # 이 사용자가 우승자로 기록된 대회도 유지하되 winner_id NULL
+        Tournament.query.filter_by(winner_id=uid).update(
+            {"winner_id": None}, synchronize_session=False)
+
+        # QuickIcon.created_by 등록자도 유지 (icon 자체는 유지)
+        QuickIcon.query.filter_by(created_by=uid).update(
+            {"created_by": None}, synchronize_session=False)
+
+        # 마지막으로 사용자 자체 삭제
+        db.session.delete(u)
+
+    db.session.commit()
+    click.echo(f"\n✓ {len(targets)}명 삭제 완료")
+
+
+@app.cli.command("find-user")
+@click.argument("query", required=True)
+def find_user(query):
+    """사용자를 이름/전화번호 부분 일치로 검색해서 표시. 삭제 전 확인용.
+
+    실행: flask --app app find-user 010     (전화번호 부분)
+          flask --app app find-user 홍길동   (이름)"""
+    from sqlalchemy import or_
+    q = query.strip()
+    users = (User.query
+             .filter(or_(User.name.ilike(f"%{q}%"), User.phone.ilike(f"%{q}%")))
+             .order_by(User.id).all())
+    if not users:
+        click.echo("일치하는 사용자가 없습니다.")
+        return
+    click.echo(f"\n{len(users)}명 발견:")
+    for u in users:
+        role = ""
+        if u.is_superadmin: role = " [최고관리자]"
+        elif u.is_admin: role = " [관리자]"
+        elif u.can_create_tournament: role = " [대회생성권한]"
+        click.echo(f"  {u.id:>4}  {u.phone:<15}  {u.name}{role}"
+                    f"  ({u.region or '-'}, {u.club or '-'})")
+
+
 @app.cli.command("reset-data")
 @click.option("--keep-banners", is_flag=True, default=False,
               help="배너/아이콘/주최자 카테고리는 남기고 대회/회원만 삭제")
