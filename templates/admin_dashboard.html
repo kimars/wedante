@@ -530,8 +530,8 @@ function renderPrelimAdmin(matches) {
         const bothSet = !!(m.player1_id && m.player2_id);
         const seqLabel = m.seq_in_group ? `${m.seq_in_group}경기` : '';
         const statusChip = m.status === '진행중'
-          ? `<span class="score-chip live">진행중 <span class="live-timer" data-started-at="${m.started_at || ''}">${m.started_at ? elapsedMinutes(m.started_at) : 0}분</span></span>`
-          : (m.status === '종료' ? '<span class="score-chip done">종료</span>' : '<span class="score-chip">시작전</span>');
+          ? `<span class="score-chip live">경기중 <span class="live-timer" data-started-at="${m.started_at || ''}">${m.started_at ? elapsedMinutes(m.started_at) : 0}분</span></span>`
+          : (m.status === '종료' ? '<span class="score-chip done">경기종료</span>' : '<span class="score-chip">경기전</span>');
         return `
         <div class="card-row" style="border-bottom:1px solid var(--border);padding:8px 0;flex-wrap:wrap;${bothSet ? '' : 'opacity:.7;'}">
           <span><strong style="color:var(--ink-faint);font-size:12px;">${seqLabel}</strong> · ${escapeHtml(p1Label)} vs ${escapeHtml(p2Label)}${statusChip}</span>

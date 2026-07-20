@@ -211,40 +211,11 @@
     </div>
   </div>
   <div id="prelim-groups" class="prelim-groups">
-    {% for gno, matches in groups.items() %}
-    <div class="prelim-group-card" data-group="{{ gno }}">
-      <div class="prelim-group-head">
-        <span class="prelim-group-title">{{ gno }}조</span>
-        <span class="prelim-group-badge" data-badge-group="{{ gno }}">시작전</span>
-      </div>
-      {% for m in matches %}
-      <div class="prelim-match-row">
-        <div class="prelim-match-label">
-          {% if m.seq_in_group == 1 or matches|length == 1 %}
-            {{ m.player1.name if m.player1 else '?' }} <span class="vs">vs</span> {{ m.player2.name if m.player2 else '?' }}
-          {% elif m.seq_in_group == 2 %}
-            <span class="prev-ref">1경기 승자</span> <span class="vs">vs</span> {{ m.player2.name if m.player2 else '?' }}
-          {% elif m.seq_in_group == 3 %}
-            <span class="prev-ref">1경기 패자</span> <span class="vs">vs</span> {{ m.player2.name if m.player2 else '?' }}
-          {% else %}
-            {{ m.player1.name if m.player1 else '?' }} <span class="vs">vs</span> {{ m.player2.name if m.player2 else '?' }}
-          {% endif %}
-        </div>
-        <div class="prelim-match-meta">
-          {% if m.scheduled_time %}<span class="time-chip">🕐 {{ m.scheduled_time }}</span>{% endif %}
-          <span class="score-chip {% if m.status == '진행중' %}live{% elif m.status == '종료' %}done{% endif %}">
-            {% if m.status == '종료' and m.score %}{{ m.score }}
-            {% elif m.status == '진행중' %}진행중
-            {% else %}시작전
-            {% endif %}
-          </span>
-        </div>
-      </div>
-      {% endfor %}
-    </div>
+    {% if groups %}
+    <p style="color:var(--ink-faint);font-size:13px;padding:20px;text-align:center;">대진표 불러오는 중...</p>
     {% else %}
-    <p style="grid-column:1/-1;color:var(--ink-faint);">아직 예선 대진표가 생성되지 않았습니다.</p>
-    {% endfor %}
+    <p style="color:var(--ink-faint);">아직 예선 대진표가 생성되지 않았습니다.</p>
+    {% endif %}
   </div>
 </div>
 
@@ -476,53 +447,82 @@ function renderPrelim(matches) {
     document.getElementById("prelim-progress-count").innerText = "0/0";
     return;
   }
-  // 조 번호별로 그룹핑
-  const groups = {};
-  matches.forEach(m => { (groups[m.group_no] ||= []).push(m); });
-  const gnos = Object.keys(groups).map(Number).sort((a,b)=>a-b);
-  // 각 조에 소속된 코트 정보 (첫 매치의 court)
-  el.innerHTML = gnos.map(gno => {
-    const ms = groups[gno].sort((a,b) => (a.seq_in_group||0) - (b.seq_in_group||0));
-    const court = ms[0] ? ms[0].court : null;
-    const allDone = ms.every(m => m.status === "종료");
-    const inProgress = ms.some(m => m.status === "진행중");
-    const badgeClass = allDone ? "done" : (inProgress ? "live" : "");
-    const badgeText = allDone ? "종료" : (inProgress ? "진행중" : "시작전");
+
+  // 1단계: 코트별로 매치 그룹핑. 그 안에서 다시 조별로.
+  const byCourt = {};
+  matches.forEach(m => {
+    const c = m.court || "?";
+    if (!byCourt[c]) byCourt[c] = {};
+    if (!byCourt[c][m.group_no]) byCourt[c][m.group_no] = [];
+    byCourt[c][m.group_no].push(m);
+  });
+
+  // 코트 순서: 숫자면 숫자 정렬, 그 외는 문자열 정렬
+  const courts = Object.keys(byCourt).sort((a, b) => {
+    const na = parseInt(a, 10), nb = parseInt(b, 10);
+    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+    return String(a).localeCompare(String(b));
+  });
+
+  el.innerHTML = courts.map(court => {
+    const groupsInCourt = byCourt[court];
+    const gnos = Object.keys(groupsInCourt).map(Number).sort((a, b) => a - b);
+
+    // 코트 전체 상태
+    const allMatches = gnos.flatMap(g => groupsInCourt[g]);
+    const totalDone = allMatches.filter(m => m.status === '종료').length;
+    const totalMatches = allMatches.length;
+    const courtStatus = totalDone === totalMatches ? '종료'
+                        : allMatches.some(m => m.status === '진행중') ? '진행중' : '';
+
+    const groupCards = gnos.map(gno => {
+      const ms = groupsInCourt[gno].sort((a, b) => (a.seq_in_group || 0) - (b.seq_in_group || 0));
+      const groupDone = ms.every(m => m.status === '종료');
+      return `
+        <div class="prelim-group-card ${groupDone ? 'group-done' : ''}">
+          <div class="prelim-group-head">
+            <span class="prelim-group-title">${gno}조</span>
+          </div>
+          ${ms.map(m => {
+            const srcMatch = m.source_match_id ? ms.find(x => x.id === m.source_match_id) : null;
+            const p1Label = m.player1 ? teamLabel(m.player1, m.player1_partner)
+                            : (srcMatch ? `${srcMatch.seq_in_group}경기 ${m.source_role === 'winner' ? '승자' : '패자'}` : '?');
+            const p2Label = m.player2 ? teamLabel(m.player2, m.player2_partner) : '?';
+            const scoreClass = m.status === '진행중' ? 'live' : (m.status === '종료' ? 'done' : '');
+            let scoreLabel;
+            if (m.status === '종료') {
+              scoreLabel = m.score ? `경기종료 · ${escapeHtml(m.score)}` : '경기종료';
+            } else if (m.status === '진행중') {
+              const min = m.started_at ? elapsedMinutes(m.started_at) : 0;
+              scoreLabel = `경기중 <span class="live-timer">${min}분</span>`;
+            } else {
+              scoreLabel = '경기전';
+            }
+            const seqBadge = m.seq_in_group ? `<span class="seq-badge">${m.seq_in_group}경기</span>` : '';
+            const orderBadge = m.court_seq ? `<span class="court-seq-badge" title="코트 내 ${m.court_seq}번째 경기">${m.court_seq}</span>` : '';
+            const startedAttr = m.started_at ? `data-started-at="${m.started_at}"` : '';
+            const bothSet = !!(m.player1_id && m.player2_id);
+            const canEdit = IS_MANAGER && bothSet;
+            const clickAttr = canEdit ? `onclick="openScoreModal(${m.id})" style="cursor:pointer;"` : '';
+            const editHint = canEdit ? `<button class="score-edit-btn" onclick="event.stopPropagation();openScoreModal(${m.id})" title="점수 입력">${m.status === '종료' ? '✎' : '📝 점수'}</button>` : '';
+            return `
+              <div class="prelim-match-row ${canEdit ? 'editable' : ''}" ${startedAttr} ${clickAttr}>
+                <div class="prelim-match-label">${orderBadge}${seqBadge} ${escapeHtml(p1Label)} <span class="vs">vs</span> ${escapeHtml(p2Label)}</div>
+                <div class="prelim-match-meta"><span class="score-chip ${scoreClass}">${scoreLabel}</span>${editHint}</div>
+              </div>`;
+          }).join("")}
+        </div>`;
+    }).join("");
+
     return `
-      <div class="prelim-group-card ${allDone ? 'group-done' : ''}">
-        <div class="prelim-group-head">
-          <span class="prelim-group-title">${gno}조${court ? ` <span class="court-chip">코트 ${court}</span>` : ''}</span>
-          <span class="prelim-group-badge ${badgeClass}">${badgeText}</span>
+      <div class="prelim-court-block">
+        <div class="prelim-court-header">
+          <span class="prelim-court-name">코트 ${escapeHtml(court)}</span>
+          <span class="prelim-court-meta">${gnos.length}개 조 · ${totalDone}/${totalMatches} 경기 완료</span>
         </div>
-        ${ms.map(m => {
-          const srcMatch = m.source_match_id ? ms.find(x=>x.id===m.source_match_id) : null;
-          const p1Label = m.player1 ? teamLabel(m.player1, m.player1_partner)
-                          : (srcMatch ? `${srcMatch.seq_in_group}경기 ${m.source_role === 'winner' ? '승자' : '패자'}` : '?');
-          const p2Label = m.player2 ? teamLabel(m.player2, m.player2_partner) : '?';
-          const timeChip = m.scheduled_time ? `<span class="time-chip">🕐 ${m.scheduled_time}</span>` : '';
-          const scoreClass = m.status === '진행중' ? 'live' : (m.status === '종료' ? 'done' : '');
-          let scoreLabel;
-          if (m.status === '종료') {
-            scoreLabel = m.score ? escapeHtml(m.score) : '종료';
-          } else if (m.status === '진행중') {
-            const min = m.started_at ? elapsedMinutes(m.started_at) : 0;
-            scoreLabel = `진행중 <span class="live-timer">${min}분</span>`;
-          } else {
-            scoreLabel = '시작전';
-          }
-          const seqBadge = m.seq_in_group ? `<span class="seq-badge">${m.seq_in_group}경기</span>` : '';
-          const startedAttr = m.started_at ? `data-started-at="${m.started_at}"` : '';
-          // 관리자면 매치 클릭 → 점수 입력 모달. 양쪽 선수가 확정된 경우에만 활성화.
-          const bothSet = !!(m.player1_id && m.player2_id);
-          const canEdit = IS_MANAGER && bothSet;
-          const clickAttr = canEdit ? `onclick="openScoreModal(${m.id})" style="cursor:pointer;"` : '';
-          const editHint = canEdit ? `<button class="score-edit-btn" onclick="event.stopPropagation();openScoreModal(${m.id})" title="점수 입력">${m.status === '종료' ? '✎' : '📝 점수'}</button>` : '';
-          return `
-            <div class="prelim-match-row ${canEdit ? 'editable' : ''}" ${startedAttr} ${clickAttr}>
-              <div class="prelim-match-label">${seqBadge} ${escapeHtml(p1Label)} <span class="vs">vs</span> ${escapeHtml(p2Label)}</div>
-              <div class="prelim-match-meta">${timeChip}<span class="score-chip ${scoreClass}">${scoreLabel}</span>${editHint}</div>
-            </div>`;
-        }).join("")}
+        <div class="prelim-court-groups ${gnos.length >= 2 ? 'two-groups' : 'one-group'}">
+          ${groupCards}
+        </div>
       </div>`;
   }).join("");
 
@@ -561,22 +561,33 @@ function renderMain(matches) {
   matches.forEach(m => { (rounds[m.round_name] ||= []).push(m); });
   const el = document.getElementById("main-bracket");
   el.innerHTML = "";
-  const ROUND_ORDER = ["128강","64강","32강","16강","8강","준결승","결승"];
+  const ROUND_ORDER = ["256강","128강","64강","32강","16강","8강","준결승","결승"];
   const sortedRounds = Object.keys(rounds).sort((a,b) => ROUND_ORDER.indexOf(a) - ROUND_ORDER.indexOf(b));
   if (sortedRounds.length === 0) {
     el.innerHTML = '<p style="color:var(--ink-faint);">아직 본선 대진표가 없습니다.</p>';
+    el.className = "bracket";
     return;
   }
+  // 첫 라운드 크기에 따라 컴팩트 클래스 자동 적용
+  const firstRound = sortedRounds[0];
+  el.className = "bracket";
+  if (firstRound === "64강" || firstRound === "128강") el.classList.add("compact-64");
+  else if (firstRound === "32강") el.classList.add("compact-32");
+
   sortedRounds.forEach(rname => {
     const ms = rounds[rname];
     const col = document.createElement("div");
     col.className = "bracket-round";
-    col.innerHTML = `<div class="round-label">${rname}</div>` + ms.sort((a,b)=>a.match_no-b.match_no).map(m => `
+    col.innerHTML = `<div class="round-label">${rname}</div>` + ms.sort((a,b)=>a.match_no-b.match_no).map(m => {
+      const p1 = m.player1 ? teamLabel(m.player1, m.player1_partner) : '?';
+      const p2 = m.player2 ? teamLabel(m.player2, m.player2_partner) : '?';
+      return `
       <div class="bracket-match ${m.status === '종료' ? 'done' : ''}">
-        <div class="p ${m.winner_id && m.winner_id === m.player1_id ? 'win' : ''}">${escapeHtml(m.player1) || '?'}</div>
-        <div class="p ${m.winner_id && m.winner_id === m.player2_id ? 'win' : ''}">${escapeHtml(m.player2) || '?'}</div>
-        ${m.score ? `<div style="font-size:11px;color:var(--ink-soft);margin-top:4px;">${escapeHtml(m.score)}</div>` : ""}
-      </div>`).join("");
+        <div class="p ${m.winner_id && m.winner_id === m.player1_id ? 'win' : ''}">${escapeHtml(p1)}</div>
+        <div class="p ${m.winner_id && m.winner_id === m.player2_id ? 'win' : ''}">${escapeHtml(p2)}</div>
+        ${m.score ? `<div style="font-size:10px;color:var(--ink-soft);margin-top:2px;">${escapeHtml(m.score)}</div>` : ""}
+      </div>`;
+    }).join("");
     el.appendChild(col);
   });
 }

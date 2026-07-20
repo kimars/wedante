@@ -162,6 +162,8 @@ ROUND_NAMES_BY_SIZE = {
     16: ["16강", "8강", "준결승", "결승"],
     32: ["32강", "16강", "8강", "준결승", "결승"],
     64: ["64강", "32강", "16강", "8강", "준결승", "결승"],
+    128: ["128강", "64강", "32강", "16강", "8강", "준결승", "결승"],
+    256: ["256강", "128강", "64강", "32강", "16강", "8강", "준결승", "결승"],
 }
 
 
@@ -2274,24 +2276,60 @@ def seed_test(count, fmt, tid, skip_draw, start_time, event_date):
         creator.set_password("test1234")
         db.session.add(creator); db.session.commit()
 
-    # 4. 테스트 선수 계정 count 명 (idempotent)
-    created = 0
+    # 4. 테스트 선수 계정 count 명 (idempotent) - 강점/약점 자동 배정
+    # 다양한 플레이 스타일의 프로필 풀 (순환 배정)
+    PLAYSTYLES = [
+        ("right", "강력한 포핸드, 빠른 서브", "백핸드가 짧고 슬라이스에 취약"),
+        ("right", "정확한 서브, 안정적인 랠리", "긴 랠리에서 체력 저하, 발리가 약함"),
+        ("left", "회전이 많은 좌완 서브, 예측 어려운 각도", "높은 공(로브)에 대응이 느림"),
+        ("right", "탁월한 발리 감각, 빠른 네트 대시", "베이스라인에서 파워 부족"),
+        ("right", "안정적인 백핸드 슬라이스, 뛰어난 컨트롤", "체력이 부족해 3세트에 약함"),
+        ("left", "강력한 포핸드 크로스, 빠른 풋워크", "백핸드가 불안정하고 오버스매시 실수 잦음"),
+        ("right", "포핸드 톱스핀, 리턴 감각 좋음", "서브가 약하고 첫 서브 성공률 낮음"),
+        ("right", "인내심 있는 랠리, 상대 실수 유도", "결정타 부족, 공격적 상황에서 소극적"),
+        ("left", "다양한 스핀, 슬라이스 서브 위력적", "체격이 작아 파워 매치에 약함"),
+        ("right", "빠른 스텝, 코트 커버리지 우수", "포핸드 위닝샷 부족"),
+        ("right", "강한 서브와 발리 위주 공격", "긴 랠리에서 실수 증가, 백핸드 리턴 약함"),
+        ("right", "안정적인 그라운드스트로크, 침착한 경기 운영", "네트 앞에서 소극적, 서브 파워 부족"),
+        ("left", "회전 서브와 각 위주 플레이", "높은 볼과 스매시 대응 취약"),
+        ("right", "리턴이 정확하고 빠른 반응 속도", "긴 경기에서 집중력 저하"),
+        ("right", "포핸드 인사이드아웃과 로브가 강점", "네트에서 발리 마무리 약함"),
+    ]
+
+    created, updated = 0, 0
     players = []
     for i in range(count):
         phone = f"010999900{i+3:02d}" if i + 3 < 100 else f"01099990{i+3:03d}"
+        style = PLAYSTYLES[i % len(PLAYSTYLES)]
+        hand, strength, weakness = style
+
         u = User.query.filter_by(phone=phone).first()
         if not u:
             name = KOREAN_NAMES[i % len(KOREAN_NAMES)] + (str(i//len(KOREAN_NAMES)+1) if i >= len(KOREAN_NAMES) else "")
             u = User(name=name, phone=phone, organizer_id=org.id,
                      region="서울" if i % 3 == 0 else ("대구" if i % 3 == 1 else "부산"),
                      club=f"테스트클럽{(i%5)+1}",
-                     phone_verified=True)
+                     handedness=hand, strengths=strength, weaknesses=weakness,
+                     playstyle_public=True, phone_verified=True)
             u.set_password("test1234")
             db.session.add(u)
             created += 1
+        else:
+            # 이미 있는 계정: 비어있는 프로필 필드만 채움 (기존 값 유지)
+            changed = False
+            if not u.handedness:
+                u.handedness = hand; changed = True
+            if not u.strengths:
+                u.strengths = strength; changed = True
+            if not u.weaknesses:
+                u.weaknesses = weakness; changed = True
+            if u.playstyle_public is None:
+                u.playstyle_public = True; changed = True
+            if changed:
+                updated += 1
         players.append(phone)
     db.session.commit()
-    click.echo(f"신규 사용자: {created}명 (기존 {count - created}명은 유지)")
+    click.echo(f"신규 사용자: {created}명 · 기존 계정 프로필 보강: {updated}명 · 총 {count}명")
 
     # 5. 대회 확보: --tid 지정 시 기존 대회, 아니면 새 대회 생성
     if tid:
