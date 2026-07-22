@@ -177,8 +177,10 @@ class Match(db.Model):
 
     player1_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     player1_partner_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)  # 복식 team1 파트너
+    player1_is_bye = db.Column(db.Boolean, default=False)                                  # slot1을 명시적으로 BYE(부전승)로 지정
     player2_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     player2_partner_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)  # 복식 team2 파트너
+    player2_is_bye = db.Column(db.Boolean, default=False)                                  # slot2를 명시적으로 BYE로 지정
     score = db.Column(db.String(50))                     # "6-3,6-4"
     winner_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
 

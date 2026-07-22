@@ -75,6 +75,8 @@ def _apply_lightweight_migrations():
         ("matches", "source_role", "VARCHAR(10)"),
         ("matches", "player1_partner_id", "INTEGER"),
         ("matches", "player2_partner_id", "INTEGER"),
+        ("matches", "player1_is_bye", "BOOLEAN DEFAULT FALSE"),
+        ("matches", "player2_is_bye", "BOOLEAN DEFAULT FALSE"),
         ("sms_logs", "created_at", "TIMESTAMP"),
     ]
     try:
@@ -261,7 +263,8 @@ def _qualifier_slot(group_no, rank, groups_count, first_round_size):
 
 def _set_group_qualifier_slot(tournament_id, group_no, rank, user_id, partner_id=None,
                                 groups_count=None):
-    """조 rank위 선수를 본선 첫 라운드 해당 슬롯에 배치. commit/emit은 호출자 책임."""
+    """조 rank위 선수를 본선 첫 라운드 해당 슬롯에 배치. commit/emit은 호출자 책임.
+    관리자가 해당 슬롯을 BYE로 지정해뒀다면 배치 스킵 (부전승 유지)."""
     first_round = _first_round_main_matches(tournament_id)
     if not first_round:
         return
@@ -274,6 +277,11 @@ def _set_group_qualifier_slot(tournament_id, group_no, rank, user_id, partner_id
     if idx >= len(first_round):
         return
     slot_match = first_round[idx]
+    # 관리자가 이 슬롯을 BYE로 지정했으면 자동 배정 스킵
+    if slot == 1 and slot_match.player1_is_bye:
+        return
+    if slot == 2 and slot_match.player2_is_bye:
+        return
     if slot == 1:
         slot_match.player1_id = user_id
         slot_match.player1_partner_id = partner_id
@@ -1660,33 +1668,57 @@ def _schedule_next_match_notification(match: Match):
 @login_required
 def api_tournament_participants_search(tid):
     """본선 매치 슬롯 배정을 위한 참가자 검색.
-    이 대회에 참가한 사람(TournamentParticipant) 중 이름/전화번호 부분일치.
+    1단계: 대회 참가자 중 부분일치
+    2단계: 대회 참가자에 없으면 organizer 소속 전체 사용자에서 부분일치 (관리자 편의)
     관리자만 호출 가능."""
     t = Tournament.query.get_or_404(tid)
     if not can_manage_tournament(current_user, t):
         abort(403)
     q = (request.args.get("q") or "").strip()
     if len(q) < 2:
-        return jsonify({"results": []})
+        return jsonify({"results": [], "source": "none", "hint": "2자 이상 입력해주세요."})
     from sqlalchemy import or_
-    users = (User.query
+
+    # 1단계: 대회 참가자 중 매칭
+    participant_users = (User.query
              .join(TournamentParticipant, TournamentParticipant.user_id == User.id)
              .filter(TournamentParticipant.tournament_id == tid)
              .filter(or_(User.name.ilike(f"%{q}%"), User.phone.ilike(f"%{q}%")))
              .limit(15).all())
+
+    # 2단계: 참가자 매칭 없으면 organizer 소속 전체에서 찾음
+    if not participant_users:
+        all_users = (User.query
+                     .filter(User.organizer_id == t.organizer_id)
+                     .filter(User.is_admin.is_(False))
+                     .filter(or_(User.name.ilike(f"%{q}%"), User.phone.ilike(f"%{q}%")))
+                     .limit(15).all())
+        return jsonify({
+            "results": [{"id": u.id, "name": u.name, "phone": u.phone or "",
+                          "is_participant": False} for u in all_users],
+            "source": "all_users",
+            "hint": ("대회 참가자로 등록된 매칭 없음. 다른 회원에서 검색됨."
+                     if all_users else "일치하는 회원 없음. 회원가입 후 다시 시도해주세요."),
+        })
+
     return jsonify({
-        "results": [{"id": u.id, "name": u.name, "phone": u.phone or ""} for u in users]
+        "results": [{"id": u.id, "name": u.name, "phone": u.phone or "",
+                      "is_participant": True} for u in participant_users],
+        "source": "participants",
+        "hint": None,
     })
 
 
 @app.route("/api/matches/<int:mid>/assign", methods=["POST"])
 @login_required
 def api_assign_match(mid):
-    """본선 대진표 관리자 수동 편집: 특정 slot에 특정 유저 할당하거나 비움.
-    body: {slot: 1 or 2, user_id: int or null, partner_id: int or null}
+    """본선 대진표 관리자 수동 편집: 특정 slot에 특정 유저 할당 or BYE 처리.
+    body: {slot: 1 or 2, user_id: int or null, partner_id: int or null, is_bye: bool (선택)}
     - 관리자만 가능
-    - 예선 매치는 자동 진행이므로 수동 편집 불가 (혼란 방지)
-    - BYE 처리는 user_id=null 로 slot 비우기"""
+    - 예선 매치는 자동 진행이므로 수동 편집 불가
+    - is_bye=True: 슬롯을 "BYE"로 명시적 마킹 (화면에 'BYE' 표시, 자동 진출 시 그 자리 피함)
+    - user_id 지정 + is_bye=False: 그 사용자 배정
+    - user_id=null + is_bye=False: 슬롯을 완전히 빈 상태로 (초기 상태)"""
     m = Match.query.get_or_404(mid)
     if not can_manage_tournament(current_user, m.tournament):
         abort(403)
@@ -1695,27 +1727,40 @@ def api_assign_match(mid):
     if m.status == "종료":
         return jsonify({"error": "이미 종료된 경기는 편집할 수 없습니다. 먼저 '경기전으로 되돌리기'를 사용해주세요."}), 400
 
-    slot = request.json.get("slot")
+    data = request.json or {}
+    slot = data.get("slot")
     if slot not in (1, 2):
         return jsonify({"error": "slot 은 1 또는 2 여야 합니다."}), 400
-    user_id = request.json.get("user_id")
-    partner_id = request.json.get("partner_id")
+    user_id = data.get("user_id")
+    partner_id = data.get("partner_id")
+    is_bye = bool(data.get("is_bye"))
 
     if user_id is not None:
         user = User.query.get(user_id)
         if not user:
             return jsonify({"error": "존재하지 않는 사용자입니다."}), 404
+        # 사용자 지정 시 BYE 플래그는 강제 False
+        is_bye = False
 
     if slot == 1:
         m.player1_id = user_id
         m.player1_partner_id = partner_id
+        m.player1_is_bye = is_bye
     else:
         m.player2_id = user_id
         m.player2_partner_id = partner_id
+        m.player2_is_bye = is_bye
+
+    # BYE가 지정된 쪽의 상대(반대편 slot)가 실제 선수라면 그 선수가 자동 승자로 다음 라운드 진출
+    # (하지만 사용자가 나중에 실제 경기 결과로 변경할 수도 있으니, 여기선 자동 승리 처리는 하지 않음)
+
     db.session.commit()
     socketio.emit("bracket_update", {"tournament_id": m.tournament_id},
                    room=f"tournament_{m.tournament_id}")
-    return jsonify({"ok": True})
+    return jsonify({"ok": True,
+                     "slot": slot,
+                     "user_id": user_id,
+                     "is_bye": is_bye})
 
 
 @app.route("/api/matches/<int:mid>/schedule", methods=["POST"])
@@ -1882,12 +1927,14 @@ def api_get_draw(tid):
             "player1_id": m.player1_id,
             "player1_partner": m.player1_partner.name if m.player1_partner else None,
             "player1_partner_id": m.player1_partner_id,
+            "player1_is_bye": bool(m.player1_is_bye),
             "player1_source_group": p1_src[0] if p1_src else None,
             "player1_source_rank": p1_src[1] if p1_src else None,
             "player2": m.player2.name if m.player2 else None,
             "player2_id": m.player2_id,
             "player2_partner": m.player2_partner.name if m.player2_partner else None,
             "player2_partner_id": m.player2_partner_id,
+            "player2_is_bye": bool(m.player2_is_bye),
             "player2_source_group": p2_src[0] if p2_src else None,
             "player2_source_rank": p2_src[1] if p2_src else None,
             "score": m.score, "status": m.status,

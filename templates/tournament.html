@@ -199,20 +199,29 @@
     <!-- 본선 전용: 선수 수동 배정 (예선에서는 자동 진출이라 숨김) -->
     <div id="score-assign-section" class="field" style="border-top:1px dashed var(--border);padding-top:12px;margin-top:12px;display:none;">
       <label style="font-size:13px;color:var(--ink-soft);">👥 선수 배정 (본선 수동 편집)</label>
-      <p style="font-size:11px;color:var(--ink-faint);margin:0 0 8px;">전화번호 또는 이름을 검색해 슬롯에 배정할 수 있습니다. 비워두면 부전승(BYE) 처리.</p>
-      <div style="margin-bottom:8px;">
-        <label style="font-size:12px;font-weight:700;">Slot 1</label>
-        <div style="display:flex;gap:6px;align-items:center;">
+      <p style="font-size:11px;color:var(--ink-faint);margin:0 0 8px;">
+        이름/전화번호로 검색해 각 슬롯에 배정합니다.<br>
+        <strong style="color:#d97706;">"BYE 지정"</strong>은 그 자리를 부전승(빈 자리)으로 명시적 마킹 → 조 1위 자동 배정 시 이 자리는 피해서 들어감.
+      </p>
+      <div style="margin-bottom:12px;padding:8px;background:var(--surface);border-radius:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <label style="font-size:12px;font-weight:800;">Slot 1</label>
+          <span id="assign-p1-current" style="font-size:11px;color:var(--ink-faint);"></span>
+        </div>
+        <div style="display:flex;gap:4px;align-items:center;">
           <input id="assign-p1-search" placeholder="이름/전화번호 검색..." style="flex:1;padding:8px;border:1px solid var(--border);border-radius:6px;font:inherit;font-size:13px;">
-          <button class="secondary" onclick="assignSlot(1, null)" style="padding:6px 10px;font-size:12px;">BYE로 비우기</button>
+          <button class="secondary" onclick="assignSlot(1, null, true)" style="padding:6px 10px;font-size:11px;background:#fef3c7;color:#d97706;border-color:#fcd34d;font-weight:700;">🚫 BYE 지정</button>
         </div>
         <div id="assign-p1-results" style="max-height:120px;overflow-y:auto;margin-top:4px;"></div>
       </div>
-      <div>
-        <label style="font-size:12px;font-weight:700;">Slot 2</label>
-        <div style="display:flex;gap:6px;align-items:center;">
+      <div style="padding:8px;background:var(--surface);border-radius:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <label style="font-size:12px;font-weight:800;">Slot 2</label>
+          <span id="assign-p2-current" style="font-size:11px;color:var(--ink-faint);"></span>
+        </div>
+        <div style="display:flex;gap:4px;align-items:center;">
           <input id="assign-p2-search" placeholder="이름/전화번호 검색..." style="flex:1;padding:8px;border:1px solid var(--border);border-radius:6px;font:inherit;font-size:13px;">
-          <button class="secondary" onclick="assignSlot(2, null)" style="padding:6px 10px;font-size:12px;">BYE로 비우기</button>
+          <button class="secondary" onclick="assignSlot(2, null, true)" style="padding:6px 10px;font-size:11px;background:#fef3c7;color:#d97706;border-color:#fcd34d;font-weight:700;">🚫 BYE 지정</button>
         </div>
         <div id="assign-p2-results" style="max-height:120px;overflow-y:auto;margin-top:4px;"></div>
       </div>
@@ -628,27 +637,33 @@ function renderMain(matches) {
     const ms = rounds[rname].sort((a, b) => a.match_no - b.match_no);
     const col = document.createElement("div");
     col.className = "bracket-round";
-    col.innerHTML = `<div class="round-label">${rname}</div>` + ms.map(m => {
+    // 두 매치씩 pair로 묶기 (본선 대진표 커넥터 정렬용)
+    // 마지막 라운드(결승 등 매치 1개) 나 홀수 매치 개수인 경우 마지막 pair는 1개 매치만
+    const matchElements = ms.map(m => {
       const isDone = m.status === '종료';
       const isLive = m.status === '진행중';
 
-      // slot별 표시: 왼쪽 = 이름(또는 '?'), 오른쪽 = 조뱃지 (첫 라운드만)
-      const slotContent = (name, partner, srcGroup, srcRank) => {
+      // slot별 표시: 왼쪽 = 이름/?/BYE, 오른쪽 = 조뱃지 (첫 라운드만)
+      const slotContent = (name, partner, srcGroup, srcRank, isBye) => {
         const displayName = name ? teamLabel(name, partner) : null;
         const srcTag = (isFirstRound && srcGroup && srcRank)
           ? `${srcGroup}조${srcRank}위`
           : null;
-        // 왼쪽: 이름 or ? (선수 미결정)
-        const nameHtml = displayName
-          ? `<span class="name">${escapeHtml(displayName)}</span>`
-          : `<span class="name placeholder">?</span>`;
-        // 오른쪽: 조뱃지 (있으면 항상 표시, 미배정도 배정도 통일)
+        let nameHtml;
+        if (isBye) {
+          // BYE 슬롯: 명시적 표기
+          nameHtml = `<span class="name bye-slot">BYE</span>`;
+        } else if (displayName) {
+          nameHtml = `<span class="name">${escapeHtml(displayName)}</span>`;
+        } else {
+          nameHtml = `<span class="name placeholder">?</span>`;
+        }
         const tagHtml = srcTag ? `<span class="source-tag">${srcTag}</span>` : '';
         return nameHtml + tagHtml;
       };
 
-      const p1Display = slotContent(m.player1, m.player1_partner, m.player1_source_group, m.player1_source_rank);
-      const p2Display = slotContent(m.player2, m.player2_partner, m.player2_source_group, m.player2_source_rank);
+      const p1Display = slotContent(m.player1, m.player1_partner, m.player1_source_group, m.player1_source_rank, m.player1_is_bye);
+      const p2Display = slotContent(m.player2, m.player2_partner, m.player2_source_group, m.player2_source_rank, m.player2_is_bye);
 
       function parseScoreForSlot(score, isWinnerSlot) {
         if (!score) return '';
@@ -698,7 +713,14 @@ function renderMain(matches) {
         </div>
         ${statusLine}
       </div>`;
-    }).join("");
+    });
+    // pair grouping - 두 매치씩 묶어 wrapper 안에 (마지막 pair가 1개일 수도 있음)
+    let pairsHtml = '';
+    for (let i = 0; i < matchElements.length; i += 2) {
+      const pairMatches = matchElements.slice(i, i + 2).join("");
+      pairsHtml += `<div class="match-pair">${pairMatches}</div>`;
+    }
+    col.innerHTML = `<div class="round-label">${rname}</div><div class="round-body">${pairsHtml}</div>`;
     el.appendChild(col);
   });
 }
@@ -755,12 +777,19 @@ function openScoreModal(mid) {
       document.getElementById("score-winner-p1").disabled = !bothSet;
       document.getElementById("score-winner-p2").disabled = !bothSet;
 
-      // 검색창 초기화
+      // 검색창 초기화 + 현재 slot 상태 표시
       if (isMain) {
         document.getElementById("assign-p1-search").value = '';
         document.getElementById("assign-p2-search").value = '';
         document.getElementById("assign-p1-results").innerHTML = '';
         document.getElementById("assign-p2-results").innerHTML = '';
+        const slotStatus = (name, isBye) => {
+          if (isBye) return '현재: 🚫 BYE (부전승)';
+          if (name) return `현재: ${name}`;
+          return '현재: (비어있음)';
+        };
+        document.getElementById("assign-p1-current").innerText = slotStatus(m.player1, m.player1_is_bye);
+        document.getElementById("assign-p2-current").innerText = slotStatus(m.player2, m.player2_is_bye);
       }
 
       document.getElementById("score-live-btn").style.display = m.status === '종료' ? 'none' : (bothSet ? '' : 'none');
@@ -873,24 +902,37 @@ function runAssignSearch(slot) {
   fetch(`/api/tournaments/${TID}/participants-search?q=${encodeURIComponent(q)}`)
     .then(r => r.json())
     .then(d => {
+      const hint = d.hint ? `<p style="font-size:11px;color:${d.source === 'all_users' ? '#d97706' : 'var(--ink-faint)'};padding:4px 6px;margin:0 0 4px;background:${d.source === 'all_users' ? '#fef3c7' : 'transparent'};border-radius:4px;">💡 ${escapeHtml(d.hint)}</p>` : '';
       if (!d.results || !d.results.length) {
-        box.innerHTML = '<p style="font-size:11px;color:var(--ink-faint);padding:4px;">일치하는 참가자 없음</p>';
+        box.innerHTML = hint + '<p style="font-size:11px;color:var(--ink-faint);padding:4px;">일치하는 회원이 없습니다.</p>';
         return;
       }
-      box.innerHTML = d.results.map(u => `
-        <div style="padding:6px 8px;background:#fff;border:1px solid var(--border);border-radius:6px;margin-bottom:3px;font-size:12px;display:flex;justify-content:space-between;align-items:center;">
-          <span><strong>${escapeHtml(u.name)}</strong> <span style="color:var(--ink-faint);">${escapeHtml(u.phone || '')}</span></span>
-          <button class="secondary" style="padding:4px 10px;font-size:11px;" onclick="assignSlot(${slot}, ${u.id})">배정</button>
+      box.innerHTML = hint + d.results.map(u => `
+        <div style="padding:6px 8px;background:#fff;border:1px solid var(--border);border-radius:6px;margin-bottom:3px;font-size:12px;display:flex;justify-content:space-between;align-items:center;gap:6px;">
+          <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;">
+            <strong>${escapeHtml(u.name)}</strong>
+            <span style="color:var(--ink-faint);">${escapeHtml(u.phone || '')}</span>
+            ${u.is_participant === false ? '<span style="font-size:10px;background:#fef3c7;color:#d97706;padding:1px 5px;border-radius:999px;margin-left:4px;">비참가자</span>' : ''}
+          </span>
+          <button class="secondary" style="padding:4px 10px;font-size:11px;flex-shrink:0;" onclick="assignSlot(${slot}, ${u.id})">Slot${slot}에 배정</button>
         </div>
       `).join('');
+    })
+    .catch(err => {
+      box.innerHTML = `<p style="color:#e33;font-size:11px;padding:4px;">검색 실패: ${escapeHtml(err.message)}</p>`;
     });
 }
 
-function assignSlot(slot, userId) {
+function assignSlot(slot, userId, isBye) {
   if (!scoreModalMatchId) return;
-  apiPost(`/api/matches/${scoreModalMatchId}/assign`, {slot, user_id: userId})
+  const body = {slot, user_id: userId, is_bye: !!isBye};
+  apiPost(`/api/matches/${scoreModalMatchId}/assign`, body)
     .then(() => {
-      toast(userId ? `Slot ${slot} 선수 배정 완료` : `Slot ${slot} BYE 처리`, "success");
+      let msg;
+      if (isBye) msg = `Slot ${slot} → BYE(부전승) 지정`;
+      else if (userId) msg = `Slot ${slot} 선수 배정 완료`;
+      else msg = `Slot ${slot} 비움`;
+      toast(msg, "success");
       closeScoreModal();
       loadDraw();
     })

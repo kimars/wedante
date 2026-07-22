@@ -356,8 +356,9 @@ a { color: inherit; text-decoration: none; transition: color .22s var(--ease), o
   transition: all .25s var(--ease);
 }
 .score-chip.live {
-  background: #10b981; color: #fff; border-color: #10b981;
+  background: #ef4444; color: #fff; border-color: #ef4444;
   animation: pulse-live 1.8s ease infinite;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
 }
 .score-chip.done {
   background: #9ca3af; color: #fff; border-color: #9ca3af;
@@ -782,10 +783,9 @@ button.loading::after {
   min-height: 300px;
 }
 .bracket-round {
-  display: flex; flex-direction: column; justify-content: space-around;
-  gap: 0;  /* gap 있으면 space-around가 안 먹음. 0으로 하여 균등 배분 */
+  display: flex; flex-direction: column;
   min-width: 130px; flex: 0 0 auto;
-  padding-top: 30px;   /* 라벨을 absolute로 띄우기 위한 공간 */
+  padding-top: 30px;
   position: relative;
 }
 .bracket-round .round-label {
@@ -797,30 +797,98 @@ button.loading::after {
   background: var(--bg); border-bottom: 1px solid var(--border);
   z-index: 1;
 }
+.round-body {
+  display: flex; flex-direction: column; justify-content: space-around;
+  flex: 1; gap: 0;
+}
+/* pair - 두 매치 묶음 (커넥터 정렬 기준) */
+.match-pair {
+  display: flex; flex-direction: column;
+  position: relative;
+}
 .bracket-match {
   background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--blue);
   border-radius: 6px; padding: 8px 10px;
   font-size: 11px; color: var(--ink-soft);
   box-shadow: var(--shadow-xs);
   transition: transform .25s var(--ease), box-shadow .25s var(--ease), border-color .25s var(--ease);
-  min-height: 62px;   /* 모든 매치 동일 최소 높이 → 라운드 간 정렬 유지 */
-  margin: 4px 0;
+  min-height: 62px;
+  margin: 6px 0;
   position: relative;
   display: flex; flex-direction: column;
 }
 .bracket-match:hover { transform: translateX(2px); box-shadow: var(--shadow-sm); border-color: var(--primary); }
 .bracket-match.done { border-left-color: var(--primary); }
+
+/* ---- 브라켓 커넥터 라인 (pair 오른쪽에 ] 모양) ---- */
+/* 마지막 라운드가 아닌 라운드의 각 pair 오른쪽에 브라켓 모양 */
+.bracket-round:not(:last-child) .match-pair {
+  padding-right: 12px;
+}
+.bracket-round:not(:last-child) .match-pair::before {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 25%; bottom: 25%;
+  border-right: 1.5px solid var(--ink-faint);
+  pointer-events: none;
+}
+/* pair 위쪽 매치에서 나오는 가로선 */
+.bracket-round:not(:last-child) .match-pair > .bracket-match:first-child::after {
+  content: '';
+  position: absolute;
+  right: -12px;
+  top: 50%;
+  width: 12px;
+  height: 1.5px;
+  background: var(--ink-faint);
+  z-index: 1;
+}
+/* pair 아래쪽 매치에서 나오는 가로선 */
+.bracket-round:not(:last-child) .match-pair > .bracket-match:last-child::after {
+  content: '';
+  position: absolute;
+  right: -12px;
+  top: 50%;
+  width: 12px;
+  height: 1.5px;
+  background: var(--ink-faint);
+  z-index: 1;
+}
+/* pair 오른쪽 중앙에서 다음 라운드 매치로 뻗는 짧은 선 */
+.bracket-round:not(:last-child) .match-pair::after {
+  content: '';
+  position: absolute;
+  right: -12px;
+  top: 50%;
+  width: 12px;
+  height: 1.5px;
+  background: var(--ink-faint);
+  z-index: 0;
+}
+/* 첫 라운드가 아닌 라운드의 매치들: 왼쪽 margin 확보 (연결선 여유) */
+.bracket-round:not(:first-child) .match-pair {
+  padding-left: 12px;
+}
+
 .bracket-match .p {
   display: flex; justify-content: space-between; align-items: center;
   padding: 1px 0;
   font-size: 12px; line-height: 1.4;
   min-width: 0; gap: 6px;
+  position: relative; z-index: 2;
 }
 .bracket-match .p .name {
   flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   text-align: left;
 }
 .bracket-match .p .name.placeholder { color: var(--ink-faint); font-weight: 500; }
+.bracket-match .p .name.bye-slot {
+  color: #d97706; font-weight: 800;
+  font-family: var(--font-mono); letter-spacing: 1px;
+  background: #fef3c7; padding: 1px 8px; border-radius: 4px;
+  display: inline-block; font-size: 11px;
+}
 .bracket-match .p .source-tag {
   font-size: 10px; color: var(--ink-faint); font-weight: 700;
   flex-shrink: 0;
@@ -839,26 +907,41 @@ button.loading::after {
 .bracket-match .p.win .set-scores { color: var(--primary); }
 .bracket-match .p.win .source-tag { color: var(--primary); opacity: 0.8; }
 
-.bracket-match.live { border-left-color: #10b981; box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.15); }
+/* ---- 경기중 매치: 빨간색으로 ---- */
+.bracket-match.live {
+  border-left-color: #ef4444;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.18);
+  background: linear-gradient(135deg, #fff, #fff5f5);
+}
 
-/* 코트 뱃지 - 우측 상단 절대 위치, 매치 높이 안 늘림 */
+/* ---- 코트 뱃지 (강조 - 시선 잘 잡히게) ---- */
 .bracket-court-tag {
-  position: absolute; top: -6px; right: 6px;
-  font-size: 9px; font-weight: 800;
-  background: linear-gradient(135deg, var(--primary), #0B7A6B);
-  color: #fff; padding: 2px 6px; border-radius: 999px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.15);
-  z-index: 2;
+  position: absolute; top: -8px; right: 8px;
+  font-size: 10px; font-weight: 800;
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #fff; padding: 3px 10px; border-radius: 999px;
+  box-shadow: 0 3px 8px rgba(217, 119, 6, 0.35);
+  z-index: 3;
+  letter-spacing: 0.3px;
+  border: 1.5px solid #fff;
 }
 
 /* 상태 라인 (하단, 자리 유지용) */
 .bracket-status {
-  font-size: 10px; font-weight: 700;
+  font-size: 11px; font-weight: 700;
   text-align: center; padding-top: 4px;
-  min-height: 14px;
-  color: transparent;   /* 기본은 투명 → 자리만 유지 */
+  min-height: 16px;
+  color: transparent;
+  position: relative; z-index: 2;
 }
-.bracket-status.live { color: #10b981; }
+.bracket-status.live {
+  color: #ef4444;
+  animation: live-pulse 1.5s ease-in-out infinite;
+}
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.65; }
+}
 .bracket-status .live-timer {
   font-family: var(--font-mono); font-weight: 800; margin-left: 2px;
 }
