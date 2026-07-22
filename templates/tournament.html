@@ -170,8 +170,8 @@
 
     <div class="field">
       <label>스코어</label>
-      <input id="score-input" placeholder="예: 6-3, 6-4 또는 6-3 6-4" style="width:100%;padding:12px;border:1px solid var(--border-strong);border-radius:8px;font:inherit;font-size:16px;box-sizing:border-box;">
-      <p style="font-size:12px;color:var(--ink-faint);margin:4px 0 0;">선수가 전화로 알려준 스코어를 그대로 입력하세요.</p>
+      <input id="score-input" placeholder="예: 63 또는 6-3, 6-4" style="width:100%;padding:12px;border:1px solid var(--border-strong);border-radius:8px;font:inherit;font-size:16px;box-sizing:border-box;">
+      <p style="font-size:12px;color:var(--ink-faint);margin:4px 0 0;">💡 "63"만 입력해도 "6-3"으로 자동 변환됩니다.</p>
     </div>
 
     <div class="field">
@@ -586,24 +586,58 @@ function renderMain(matches) {
     el.className = "bracket";
     return;
   }
-  // 첫 라운드 크기에 따라 컴팩트 클래스 자동 적용
   const firstRound = sortedRounds[0];
   el.className = "bracket";
   if (firstRound === "64강" || firstRound === "128강") el.classList.add("compact-64");
   else if (firstRound === "32강") el.classList.add("compact-32");
 
-  sortedRounds.forEach(rname => {
-    const ms = rounds[rname];
+  sortedRounds.forEach((rname, roundIdx) => {
+    const isFirstRound = roundIdx === 0;
+    const ms = rounds[rname].sort((a, b) => a.match_no - b.match_no);
     const col = document.createElement("div");
     col.className = "bracket-round";
-    col.innerHTML = `<div class="round-label">${rname}</div>` + ms.sort((a,b)=>a.match_no-b.match_no).map(m => {
-      const p1 = m.player1 ? teamLabel(m.player1, m.player1_partner) : '?';
-      const p2 = m.player2 ? teamLabel(m.player2, m.player2_partner) : '?';
+    col.innerHTML = `<div class="round-label">${rname}</div>` + ms.map(m => {
+      const isDone = m.status === '종료';
+      // slot별 표시: 이름 + 조 표기 (예: "송지호 1조1위" 또는 "1조 1위" 미배정 시)
+      const nameOrPlaceholder = (name, partner, srcGroup, srcRank) => {
+        const displayName = name ? teamLabel(name, partner) : null;
+        // 첫 라운드이고 소스 조 정보 있으면 표기
+        const srcTag = (isFirstRound && srcGroup && srcRank)
+          ? `${srcGroup}조${srcRank}위`
+          : null;
+        if (!displayName && srcTag) {
+          // 아직 결정되지 않은 슬롯 → "1조 1위" 만
+          return `<span class="name" style="color:var(--ink-faint);">${srcTag}</span>`;
+        }
+        if (displayName && srcTag) {
+          if (isDone && m.winner_id) {
+            // 경기 종료 후: "조1위 송지호"
+            const isWin = (name === m.player1 && m.winner_id === m.player1_id)
+                       || (name === m.player2 && m.winner_id === m.player2_id);
+            return `<span class="name">${escapeHtml(displayName)}</span><span class="source-tag">${srcTag}</span>`;
+          }
+          // 경기 전: "송지호 (1조1위)"
+          return `<span class="name">${escapeHtml(displayName)}</span><span class="source-tag">${srcTag}</span>`;
+        }
+        return `<span class="name">${displayName ? escapeHtml(displayName) : '?'}</span>`;
+      };
+
+      const p1 = nameOrPlaceholder(m.player1, m.player1_partner, m.player1_source_group, m.player1_source_rank);
+      const p2 = nameOrPlaceholder(m.player2, m.player2_partner, m.player2_source_group, m.player2_source_rank);
+      const bothSet = !!(m.player1_id && m.player2_id);
+      const canEdit = IS_MANAGER && bothSet;
+      const clickAttr = canEdit ? `onclick="openScoreModal(${m.id})" style="cursor:pointer;"` : '';
+      const scoreLine = m.score
+        ? `<div style="font-size:10px;color:var(--ink-soft);margin-top:2px;text-align:center;">${escapeHtml(m.score)}</div>`
+        : '';
+      const timeLine = m.scheduled_time
+        ? `<div style="font-size:9px;color:var(--ink-faint);text-align:center;">🕐 ${escapeHtml(m.scheduled_time)}${m.court ? ' · 코트'+escapeHtml(m.court) : ''}</div>`
+        : (m.court ? `<div style="font-size:9px;color:var(--ink-faint);text-align:center;">코트 ${escapeHtml(m.court)}</div>` : '');
       return `
-      <div class="bracket-match ${m.status === '종료' ? 'done' : ''}">
-        <div class="p ${m.winner_id && m.winner_id === m.player1_id ? 'win' : ''}">${escapeHtml(p1)}</div>
-        <div class="p ${m.winner_id && m.winner_id === m.player2_id ? 'win' : ''}">${escapeHtml(p2)}</div>
-        ${m.score ? `<div style="font-size:10px;color:var(--ink-soft);margin-top:2px;">${escapeHtml(m.score)}</div>` : ""}
+      <div class="bracket-match ${isDone ? 'done' : ''}" ${clickAttr}>
+        <div class="p ${m.winner_id && m.winner_id === m.player1_id ? 'win' : ''}">${p1}</div>
+        <div class="p ${m.winner_id && m.winner_id === m.player2_id ? 'win' : ''}">${p2}</div>
+        ${scoreLine}${timeLine}
       </div>`;
     }).join("");
     el.appendChild(col);
@@ -674,8 +708,28 @@ function updateWinnerButtons() {
   document.getElementById("score-winner-p1").classList.toggle("selected", scoreModalWinnerSlot === 1);
   document.getElementById("score-winner-p2").classList.toggle("selected", scoreModalWinnerSlot === 2);
 }
+function normalizeScore(input) {
+  // "63" → "6-3", "63 64" → "6-3, 6-4", "63,64" → "6-3, 6-4"
+  // 이미 하이픈 있으면 그대로 유지
+  return input.split(/[,\s/]+/)
+    .filter(s => s)
+    .map(s => {
+      // 이미 하이픈 있으면 그대로 (예: "6-3", "7-6")
+      if (s.includes('-')) return s;
+      // 정확히 2자리 숫자 (예: 63, 64, 75, 76) → 앞뒤로 분리
+      if (/^\d{2}$/.test(s)) return s[0] + '-' + s[1];
+      // 3자리 (예: 610 → 6-10, 76-tiebreak 표기)
+      if (/^\d{3}$/.test(s)) return s[0] + '-' + s.slice(1);
+      // 4자리 (예: 6376 → 6-3, 7-6 - 두 세트)
+      if (/^\d{4}$/.test(s)) return s[0] + '-' + s[1] + ', ' + s[2] + '-' + s[3];
+      return s;   // 그 외는 그대로
+    })
+    .join(', ');
+}
+
 function saveScore() {
-  const score = document.getElementById("score-input").value.trim();
+  let score = document.getElementById("score-input").value.trim();
+  score = normalizeScore(score);   // "63" → "6-3" 자동 변환
   const errEl = document.getElementById("score-modal-error");
   errEl.style.display = "none";
   if (!scoreModalWinnerSlot) {
@@ -684,7 +738,7 @@ function saveScore() {
     return;
   }
   if (!score) {
-    errEl.innerText = "스코어를 입력해주세요. (예: 6-3, 6-4)";
+    errEl.innerText = "스코어를 입력해주세요. (예: 63 또는 6-3, 6-4)";
     errEl.style.display = "block";
     return;
   }

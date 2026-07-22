@@ -98,6 +98,7 @@ class Tournament(db.Model):
     start_time = db.Column(db.String(10), default="09:00")   # 첫 경기 시작 시각
     match_interval_min = db.Column(db.Integer, default=30)  # 경기 간격(분)
     groups_per_court = db.Column(db.Integer, default=2)     # 1코트당 조 수 (1 또는 2)
+    main_bracket_size = db.Column(db.Integer)                # 본선 크기 (16/32/64). None이면 자동 계산
     main_bracket_frame = db.Column(db.Text)                  # 본선 슬롯 사전 배치 JSON (선택)
     parking_url = db.Column(db.String(400))          # 주차등록 링크 (외부)
     deposit_bank = db.Column(db.String(40))          # 참가비 입금계좌 은행

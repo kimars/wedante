@@ -60,6 +60,7 @@ def _apply_lightweight_migrations():
         ("tournaments", "start_time", "VARCHAR(10) DEFAULT '09:00'"),
         ("tournaments", "match_interval_min", "INTEGER DEFAULT 30"),
         ("tournaments", "groups_per_court", "INTEGER DEFAULT 2"),
+        ("tournaments", "main_bracket_size", "INTEGER"),
         ("tournaments", "main_bracket_frame", "TEXT"),
         ("tournament_participants", "partner_id", "INTEGER"),
         ("call_logs", "message", "TEXT"),
@@ -173,12 +174,15 @@ def next_power_of_two(n):
 
 def build_main_bracket(tournament_id, groups_count, qualifiers_per_group=2):
     """예선 각 조에서 qualifiers_per_group 명(팀)이 본선 진출한다고 가정하고 본선 트리 생성.
-    - 총 진출자 = groups_count * qualifiers_per_group  (기본: 조당 2명 = 1위+2위)
-    - 본선 크기 = 진출자 수를 위로 반올림한 2의 거듭제곱 (부전승 슬롯 자동 발생)
-    - 라운드 이름: 64강/32강/16강/8강/준결승/결승 등 크기에 따라 자동
-    반환값: 1라운드 매치 리스트"""
-    total_qualifiers = max(groups_count * qualifiers_per_group, 2)
-    size = next_power_of_two(total_qualifiers)
+    - Tournament.main_bracket_size 가 지정되면 그 크기(16/32/64) 우선 사용
+    - 없으면 자동 계산 (groups_count * qualifiers_per_group 을 2의 거듭제곱으로 올림)
+    """
+    t = Tournament.query.get(tournament_id)
+    if t and t.main_bracket_size and t.main_bracket_size in (2, 4, 8, 16, 32, 64, 128, 256):
+        size = t.main_bracket_size
+    else:
+        total_qualifiers = max(groups_count * qualifiers_per_group, 2)
+        size = next_power_of_two(total_qualifiers)
     round_names = ROUND_NAMES_BY_SIZE.get(size, [f"{size}강"] + ["결승"])
 
     rounds = []
@@ -565,12 +569,16 @@ def api_sms_test():
         return jsonify({"error": "전화번호를 입력해주세요."}), 400
     message = (request.json or {}).get("message") or f"[위단테] 테스트 문자입니다. ({datetime.now(KST).strftime('%H:%M:%S')})"
     r = send_sms(phone, message)
-    # 로그도 남김
-    db.session.add(SmsLog(
-        tournament_id=None, user_id=current_user.id, message=message,
-        success=bool(r.get("success")), provider_response=str(r.get("raw"))[:500]
-    ))
-    db.session.commit()
+    # 로그도 남김 (실패해도 발송 결과는 정상 반환)
+    try:
+        db.session.add(SmsLog(
+            tournament_id=None, user_id=current_user.id, message=message,
+            success=bool(r.get("success")), provider_response=str(r.get("raw"))[:500]
+        ))
+        db.session.commit()
+    except Exception as log_err:
+        app.logger.warning(f"SMS 로그 저장 실패 (발송은 정상): {log_err}")
+        db.session.rollback()
     return jsonify({
         "success": r.get("success"),
         "raw": r.get("raw"),
@@ -1369,6 +1377,7 @@ def new_tournament():
             start_time=f.get("start_time") or "09:00",
             match_interval_min=int(f.get("match_interval_min") or 30),
             groups_per_court=int(f.get("groups_per_court") or 2),
+            main_bracket_size=(int(f.get("main_bracket_size")) if f.get("main_bracket_size") else None),
             parking_url=f.get("parking_url") or None,
             deposit_bank=f.get("deposit_bank") or None,
             deposit_account=f.get("deposit_account") or None,
@@ -1736,7 +1745,24 @@ def api_get_draw(tid):
             .options(joinedload(Match.player1), joinedload(Match.player2))
             .all())
 
+    # 본선 첫 라운드 매치의 소스 조/순위 매핑 계산
+    # (예: 매치1 slot1 → 1조 1위, 매치1 slot2 → 2조 2위 등)
+    first_round_source = {}   # (match_id, slot) -> (group_no, rank)
+    if main:
+        first_round = _first_round_main_matches(tid)
+        groups_count = (db.session.query(func.count(func.distinct(Match.group_no)))
+                        .filter(Match.tournament_id == tid, Match.stage == "prelim").scalar()) or 0
+        t = Tournament.query.get(tid)
+        if first_round and groups_count > 0:
+            for gno in range(1, groups_count + 1):
+                for rank in (1, 2):
+                    idx, slot = _resolve_bracket_slot(t, gno, rank, groups_count, len(first_round))
+                    if 0 <= idx < len(first_round):
+                        first_round_source[(first_round[idx].id, slot)] = (gno, rank)
+
     def m2d(m):
+        p1_src = first_round_source.get((m.id, 1))
+        p2_src = first_round_source.get((m.id, 2))
         return {
             "id": m.id, "stage": m.stage, "group_no": m.group_no,
             "seq_in_group": m.seq_in_group,
@@ -1745,10 +1771,14 @@ def api_get_draw(tid):
             "player1_id": m.player1_id,
             "player1_partner": m.player1_partner.name if m.player1_partner else None,
             "player1_partner_id": m.player1_partner_id,
+            "player1_source_group": p1_src[0] if p1_src else None,
+            "player1_source_rank": p1_src[1] if p1_src else None,
             "player2": m.player2.name if m.player2 else None,
             "player2_id": m.player2_id,
             "player2_partner": m.player2_partner.name if m.player2_partner else None,
             "player2_partner_id": m.player2_partner_id,
+            "player2_source_group": p2_src[0] if p2_src else None,
+            "player2_source_rank": p2_src[1] if p2_src else None,
             "score": m.score, "status": m.status,
             "winner_id": m.winner_id,
             "court": m.court, "court_seq": m.court_seq,
@@ -2808,6 +2838,65 @@ def reset_data(keep_banners, yes):
         db.session.commit()
 
     click.echo("✓ 삭제 완료. 최고 관리자 계정만 남아있습니다.")
+
+
+@app.route("/admin/users")
+@login_required
+def admin_users_page():
+    """관리자용 전체 회원 리스트 페이지."""
+    if not current_user.is_admin:
+        abort(403)
+    return render_template("admin_users.html")
+
+
+@app.route("/api/admin/users")
+@login_required
+def api_admin_users_list():
+    """관리자용 회원 리스트 API - 검색/필터/페이지네이션 지원."""
+    if not current_user.is_admin:
+        abort(403)
+    from sqlalchemy import or_
+    q = (request.args.get("q") or "").strip()
+    role = request.args.get("role") or "all"    # all | admin | player
+    page = max(1, int(request.args.get("page", 1)))
+    per_page = 50
+
+    query = User.query
+    if q:
+        query = query.filter(or_(
+            User.name.ilike(f"%{q}%"),
+            User.phone.ilike(f"%{q}%"),
+            User.club.ilike(f"%{q}%"),
+            User.region.ilike(f"%{q}%"),
+        ))
+    if role == "admin":
+        query = query.filter(User.is_admin.is_(True))
+    elif role == "player":
+        query = query.filter(User.is_admin.is_(False))
+
+    total = query.count()
+    users = (query.order_by(User.id.desc())
+             .offset((page - 1) * per_page)
+             .limit(per_page).all())
+
+    return jsonify({
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": (total + per_page - 1) // per_page,
+        "users": [{
+            "id": u.id,
+            "name": u.name,
+            "phone": u.phone,
+            "region": u.region or "",
+            "club": u.club or "",
+            "is_admin": u.is_admin,
+            "is_superadmin": u.is_superadmin,
+            "can_create_tournament": u.can_create_tournament,
+            "phone_verified": u.phone_verified,
+            "created_at": u.created_at.strftime("%Y-%m-%d") if u.created_at else "",
+        } for u in users]
+    })
 
 
 @app.route("/analyze", methods=["GET"])

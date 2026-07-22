@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}회원 관리 · 위단테{% endblock %}
+{% block content %}
+<span class="eyebrow">Admin · Users</span>
+<h1>👥 전체 회원 리스트</h1>
+<p style="color:var(--ink-soft);max-width:640px;">
+  가입한 회원을 검색하고 확인할 수 있습니다. 계정 삭제는 Railway shell의
+  <code style="background:var(--surface-2);padding:2px 6px;border-radius:4px;font-size:12px;">flask --app app delete-user 전화번호</code>
+  명령어를 사용해주세요.
+</p>
+
+<div class="card" style="margin:20px 0;">
+  <div class="card-row" style="gap:10px;flex-wrap:wrap;">
+    <input id="user-search" placeholder="이름, 전화번호, 클럽, 지역으로 검색..." autocomplete="off"
+           style="flex:1;min-width:200px;padding:10px 14px;border:1px solid var(--border-strong);border-radius:8px;font:inherit;">
+    <select id="user-role" onchange="loadUsers(1)"
+            style="padding:10px 14px;border:1px solid var(--border-strong);border-radius:8px;background:#fff;">
+      <option value="all">전체</option>
+      <option value="player">일반 회원</option>
+      <option value="admin">관리자</option>
+    </select>
+    <button onclick="loadUsers(1)">🔍 검색</button>
+  </div>
+</div>
+
+<div id="users-stats" style="margin-bottom:16px;font-size:13px;color:var(--ink-soft);"></div>
+
+<div id="users-list"></div>
+
+<div id="users-pagination" style="display:flex;gap:6px;justify-content:center;margin:20px 0;flex-wrap:wrap;"></div>
+
+<style>
+.user-row {
+  display: grid;
+  grid-template-columns: 50px 1fr 1fr 1fr auto;
+  gap: 12px; align-items: center;
+  padding: 10px 14px; background: #fff;
+  border: 1px solid var(--border); border-radius: 10px;
+  margin-bottom: 6px; font-size: 13px;
+  transition: all .18s var(--ease);
+}
+.user-row:hover { border-color: var(--primary); box-shadow: var(--shadow-sm); }
+.user-row .user-id { font-family: var(--font-mono); color: var(--ink-faint); font-size: 12px; }
+.user-row .user-name { font-weight: 700; color: var(--ink); }
+.user-row .user-phone { font-family: var(--font-mono); color: var(--ink-soft); }
+.user-row .user-meta { color: var(--ink-soft); font-size: 12px; }
+.user-row .role-badges { display: flex; gap: 4px; flex-wrap: wrap; }
+.role-badge {
+  font-size: 10px; font-weight: 800; padding: 2px 6px; border-radius: 999px;
+  letter-spacing: 0.3px;
+}
+.role-badge.super { background: #fef2f2; color: #b13224; }
+.role-badge.admin { background: #eff6ff; color: #2563eb; }
+.role-badge.creator { background: #f5f3ff; color: #7c3aed; }
+.role-badge.verified { background: #ecfdf5; color: #059669; }
+@media (max-width: 640px) {
+  .user-row { grid-template-columns: 40px 1fr auto; }
+  .user-row .user-meta:nth-child(3),
+  .user-row .user-meta:nth-child(4) { display: none; }
+}
+.page-btn {
+  padding: 6px 12px; border: 1px solid var(--border);
+  background: #fff; border-radius: 6px; cursor: pointer;
+  font-size: 13px; font-family: var(--font-mono);
+}
+.page-btn:hover { background: var(--surface); border-color: var(--primary); }
+.page-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+</style>
+
+<script>
+let currentPage = 1;
+let searchTimer;
+
+document.getElementById("user-search").addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => loadUsers(1), 300);
+});
+document.getElementById("user-search").addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); loadUsers(1); }
+});
+
+function loadUsers(page) {
+  currentPage = page;
+  const q = document.getElementById("user-search").value.trim();
+  const role = document.getElementById("user-role").value;
+  const params = new URLSearchParams({q, role, page});
+
+  fetch(`/api/admin/users?${params}`)
+    .then(r => r.json())
+    .then(d => renderUsers(d))
+    .catch(err => {
+      document.getElementById("users-list").innerHTML = `<p style="color:#e33;">에러: ${escapeHtml(err.message)}</p>`;
+    });
+}
+
+function renderUsers(d) {
+  document.getElementById("users-stats").innerHTML =
+    `총 <strong>${d.total}</strong>명 · ${d.page}/${d.total_pages || 1} 페이지`;
+
+  const list = document.getElementById("users-list");
+  if (!d.users.length) {
+    list.innerHTML = '<div class="card" style="text-align:center;color:var(--ink-faint);">일치하는 회원이 없습니다.</div>';
+    document.getElementById("users-pagination").innerHTML = '';
+    return;
+  }
+
+  list.innerHTML = d.users.map(u => {
+    const badges = [];
+    if (u.is_superadmin) badges.push('<span class="role-badge super">최고관리자</span>');
+    else if (u.is_admin) badges.push('<span class="role-badge admin">관리자</span>');
+    if (u.can_create_tournament && !u.is_admin) badges.push('<span class="role-badge creator">대회생성</span>');
+    if (u.phone_verified) badges.push('<span class="role-badge verified">인증</span>');
+    return `
+      <div class="user-row">
+        <span class="user-id">#${u.id}</span>
+        <div>
+          <div class="user-name">${escapeHtml(u.name)}</div>
+          <div class="user-meta">${escapeHtml(u.phone)}</div>
+        </div>
+        <div class="user-meta">${escapeHtml(u.region || '-')}</div>
+        <div class="user-meta">${escapeHtml(u.club || '-')}</div>
+        <div class="role-badges">${badges.join('')}</div>
+      </div>`;
+  }).join('');
+
+  // 페이지네이션
+  const pager = document.getElementById("users-pagination");
+  const totalPages = d.total_pages || 1;
+  if (totalPages <= 1) { pager.innerHTML = ''; return; }
+  let html = '';
+  const start = Math.max(1, currentPage - 3);
+  const end = Math.min(totalPages, currentPage + 3);
+  if (currentPage > 1) html += `<button class="page-btn" onclick="loadUsers(1)">« 처음</button>`;
+  if (currentPage > 1) html += `<button class="page-btn" onclick="loadUsers(${currentPage - 1})">‹</button>`;
+  for (let p = start; p <= end; p++) {
+    html += `<button class="page-btn ${p === currentPage ? 'active' : ''}" onclick="loadUsers(${p})">${p}</button>`;
+  }
+  if (currentPage < totalPages) html += `<button class="page-btn" onclick="loadUsers(${currentPage + 1})">›</button>`;
+  if (currentPage < totalPages) html += `<button class="page-btn" onclick="loadUsers(${totalPages})">끝 »</button>`;
+  pager.innerHTML = html;
+}
+
+function escapeHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
+}
+
+loadUsers(1);
+</script>
+{% endblock %}

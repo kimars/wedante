@@ -73,8 +73,14 @@ a { color: inherit; text-decoration: none; transition: color .22s var(--ease), o
 }
 .brand { display: flex; align-items: center; gap: 9px; transition: transform .3s var(--ease-spring); }
 .brand:hover { transform: scale(1.02); }
-.brand-mark { display: flex; filter: drop-shadow(0 3px 8px rgba(14,159,140,.35)); transition: transform .5s var(--ease); }
+.brand-mark {
+  display: flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px;
+  filter: drop-shadow(0 3px 8px rgba(0,0,0,.15));
+  transition: transform .5s var(--ease);
+}
 .brand:hover .brand-mark { transform: rotate(-14deg); }
+.brand-logo-img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .brand-word { font-weight: 800; font-size: 19px; letter-spacing: -.3px; color: var(--ink); }
 .site-header nav { display: flex; align-items: center; gap: 22px; font-size: 14px; }
 .site-header nav a { color: var(--ink-soft); position: relative; padding: 8px 2px; font-weight: 600; }
@@ -769,15 +775,23 @@ button.loading::after {
   display: flex; gap: 20px; overflow-x: auto;
   padding: 12px 4px 32px;
   align-items: stretch;
+  min-height: 300px;
 }
 .bracket-round {
   display: flex; flex-direction: column; justify-content: space-around;
-  gap: 8px; min-width: 130px; flex: 0 0 auto;
+  gap: 0;  /* gap 있으면 space-around가 안 먹음. 0으로 하여 균등 배분 */
+  min-width: 130px; flex: 0 0 auto;
+  padding-top: 30px;   /* 라벨을 absolute로 띄우기 위한 공간 */
+  position: relative;
 }
 .bracket-round .round-label {
+  position: absolute; top: 0; left: 0; right: 0;
   font-size: 10px; text-transform: uppercase; letter-spacing: 1.2px;
-  color: var(--ink-faint); font-weight: 800; margin-bottom: 6px;
+  color: var(--ink-faint); font-weight: 800;
   text-align: center;
+  padding: 6px 0;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  z-index: 1;
 }
 .bracket-match {
   background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--blue);
@@ -786,43 +800,55 @@ button.loading::after {
   box-shadow: var(--shadow-xs);
   transition: transform .25s var(--ease), box-shadow .25s var(--ease), border-color .25s var(--ease);
   min-height: 42px;
+  margin: 4px 0;   /* 매치 간 최소 간격만 */
 }
 .bracket-match:hover { transform: translateX(2px); box-shadow: var(--shadow-sm); border-color: var(--primary); }
 .bracket-match.done { border-left-color: var(--primary); }
 .bracket-match .p {
   display: flex; justify-content: space-between; padding: 1px 0;
   font-size: 11px; line-height: 1.4;
+  min-width: 0;
+}
+.bracket-match .p .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bracket-match .p .source-tag {
+  font-size: 9px; color: var(--ink-faint); font-weight: 700;
+  flex-shrink: 0; margin-left: 4px;
+  font-family: var(--font-mono);
 }
 .bracket-match .p.win { font-weight: 800; color: var(--ink); }
+.bracket-match .p.win .source-tag { color: var(--primary); }
 
-/* 라운드 수가 많은 경우 (32강 이상) - 자동 축소 */
+/* 라운드 수가 많은 경우 - 자동 축소 */
 .bracket.compact-32,
 .bracket.compact-64 {
   gap: 12px;
 }
 .bracket.compact-32 .bracket-round,
 .bracket.compact-64 .bracket-round {
-  min-width: 90px; gap: 3px;
+  min-width: 100px;
 }
 .bracket.compact-32 .bracket-match,
 .bracket.compact-64 .bracket-match {
   padding: 3px 5px; font-size: 9.5px; min-height: 28px;
-  border-radius: 4px;
+  border-radius: 4px; margin: 2px 0;
 }
 .bracket.compact-32 .bracket-match .p,
 .bracket.compact-64 .bracket-match .p {
   font-size: 9.5px; padding: 0;
 }
-.bracket.compact-64 .bracket-round { min-width: 72px; }
+.bracket.compact-32 .bracket-match .source-tag,
+.bracket.compact-64 .bracket-match .source-tag {
+  font-size: 8px;
+}
+.bracket.compact-64 .bracket-round { min-width: 82px; }
 .bracket.compact-64 .bracket-match { padding: 2px 4px; font-size: 8.5px; min-height: 22px; }
 .bracket.compact-64 .bracket-match .p { font-size: 8.5px; }
 
-/* 모바일 - 가로 스크롤 유지하되 셀 크기는 유지 */
 @media (max-width: 640px) {
   .bracket { padding: 8px 4px 20px; }
   .bracket-round { min-width: 110px; }
-  .bracket.compact-32 .bracket-round { min-width: 78px; }
-  .bracket.compact-64 .bracket-round { min-width: 60px; }
+  .bracket.compact-32 .bracket-round { min-width: 88px; }
+  .bracket.compact-64 .bracket-round { min-width: 70px; }
 }
 
 /* ---------- Call panel (player) ---------- */

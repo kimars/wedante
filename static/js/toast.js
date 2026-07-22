@@ -39,10 +39,22 @@ function apiPost(url, body) {
   return fetch(url, {
     method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify(body || {})
-  }).then(r => r.json().then(data => {
+  }).then(async r => {
+    const text = await r.text();
+    // 응답을 우선 JSON 으로 파싱 시도. 실패하면 HTML 에러 페이지 등.
+    let data;
+    try { data = JSON.parse(text); }
+    catch {
+      // JSON이 아님 - HTML 에러 페이지 등. 서버 500 이나 프록시 에러일 수 있음
+      if (!r.ok) {
+        throw new Error(`서버 오류 (HTTP ${r.status}). 잠시 후 다시 시도해주세요.`);
+      }
+      // 200인데 JSON이 아닌 경우 (드물지만 CDN 캐시 등)
+      throw new Error("서버 응답을 이해할 수 없습니다.");
+    }
     if (!r.ok || data.error) {
-      throw new Error(data.error || "요청에 실패했습니다.");
+      throw new Error(data.error || `요청에 실패했습니다. (HTTP ${r.status})`);
     }
     return data;
-  }));
+  });
 }

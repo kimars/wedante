@@ -14,6 +14,18 @@
     </select>
   </div>
   <div class="field">
+    <label>본선 대진표 크기</label>
+    <select name="main_bracket_size">
+      <option value="">자동 (진출자 수에 맞게 계산)</option>
+      <option value="16">16강 대진표 (진출 최대 16명/팀)</option>
+      <option value="32">32강 대진표 (진출 최대 32명/팀)</option>
+      <option value="64">64강 대진표 (진출 최대 64명/팀)</option>
+    </select>
+    <p style="font-size:12px;color:var(--ink-faint);margin:4px 0 0;">
+      본선 트리 크기를 미리 정해두면 부전승(BYE) 슬롯이 자동으로 남아 유연한 대진 운영이 가능합니다.
+    </p>
+  </div>
+  <div class="field">
     <label>예선 코트 배치 방식</label>
     <select name="groups_per_court">
       <option value="2" selected>1코트에 2개 조 (참가자 많을 때) - 6경기, 30분 간격 교차 진행</option>
