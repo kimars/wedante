@@ -414,12 +414,25 @@ function render() {
   ctx.lineWidth = 1;
   ctx.stroke();
 
+  // 코트 중앙 명언 - "승리는 끈질긴 자의 것"
+  // 랠리 진행 중이면 반투명하게, 서브 대기/멈춤 시엔 조금 진하게
+  const quoteAlpha = state.running ? (state.rallyCount > 0 ? 0.18 : 0.45) : 0.6;
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = `rgba(255, 255, 255, ${quoteAlpha})`;
+  ctx.font = "italic bold 15px 'Pretendard', sans-serif";
+  ctx.shadowColor = "rgba(0, 0, 0, 0.35)";
+  ctx.shadowBlur = 6;
+  ctx.fillText("승리는 끈질긴 자의 것", W / 2, H / 2 + 22);
+  ctx.restore();
+
   // 랠리 카운트 (좌상단)
   if (state.rallyCount > 0) {
     ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
     ctx.font = "bold 14px monospace";
     ctx.textAlign = "center";
-    ctx.fillText(`랠리 ${state.rallyCount}회`, W / 2, H / 2 - 8);
+    ctx.fillText(`랠리 ${state.rallyCount}회`, W / 2, H / 2 - 22);
   }
 }
 

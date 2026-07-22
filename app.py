@@ -914,15 +914,45 @@ def index():
 
 @app.route("/tournaments")
 def tournament_list_page():
-    """대회 전체 페이지 - 단식/복식 탭으로 분리. 각 탭은 날짜순 정렬."""
-    fmt = request.args.get("format", "singles")
-    if fmt not in ("singles", "doubles"):
-        fmt = "singles"
-    tournaments = (Tournament.query
-                   .filter(Tournament.format == fmt)
-                   .order_by(Tournament.event_date.desc().nullslast(), Tournament.id.desc())
-                   .all())
-    return render_template("tournament_list.html", tournaments=tournaments, current_format=fmt)
+    """대회 전체 페이지 - 상태(진행중/접수중/종료/전체) + 단식/복식 필터. 날짜순 정렬."""
+    fmt = request.args.get("format", "all")
+    if fmt not in ("all", "singles", "doubles"):
+        fmt = "all"
+    status = request.args.get("status", "live")
+    if status not in ("live", "open", "closed", "all"):
+        status = "live"
+
+    today_kst = datetime.now(KST).strftime("%Y-%m-%d")
+    query = Tournament.query
+
+    # 종목 필터
+    if fmt in ("singles", "doubles"):
+        query = query.filter(Tournament.format == fmt)
+
+    # 상태 필터
+    if status == "live":
+        # 진행중: 오늘 열리는 대회
+        query = query.filter(
+            (Tournament.event_date == today_kst) | (Tournament.status == "진행중")
+        )
+    elif status == "open":
+        # 접수중: status가 접수중이고 오늘 이후 or 날짜 미정
+        query = query.filter(Tournament.status == "접수중").filter(
+            (Tournament.event_date == None) | (Tournament.event_date >= today_kst)
+        )
+    elif status == "closed":
+        # 종료: 지난 대회 또는 status가 종료
+        query = query.filter(
+            (Tournament.status == "종료") | (Tournament.event_date < today_kst)
+        )
+    # status == "all"은 필터 안 함
+
+    tournaments = query.order_by(
+        Tournament.event_date.desc().nullslast(), Tournament.id.desc()
+    ).all()
+
+    return render_template("tournament_list.html", tournaments=tournaments,
+                            current_format=fmt, current_status=status)
 
 
 @app.route("/org/<slug>")
@@ -1626,6 +1656,87 @@ def _schedule_next_match_notification(match: Match):
     return
 
 
+@app.route("/api/tournaments/<int:tid>/participants-search")
+@login_required
+def api_tournament_participants_search(tid):
+    """본선 매치 슬롯 배정을 위한 참가자 검색.
+    이 대회에 참가한 사람(TournamentParticipant) 중 이름/전화번호 부분일치.
+    관리자만 호출 가능."""
+    t = Tournament.query.get_or_404(tid)
+    if not can_manage_tournament(current_user, t):
+        abort(403)
+    q = (request.args.get("q") or "").strip()
+    if len(q) < 2:
+        return jsonify({"results": []})
+    from sqlalchemy import or_
+    users = (User.query
+             .join(TournamentParticipant, TournamentParticipant.user_id == User.id)
+             .filter(TournamentParticipant.tournament_id == tid)
+             .filter(or_(User.name.ilike(f"%{q}%"), User.phone.ilike(f"%{q}%")))
+             .limit(15).all())
+    return jsonify({
+        "results": [{"id": u.id, "name": u.name, "phone": u.phone or ""} for u in users]
+    })
+
+
+@app.route("/api/matches/<int:mid>/assign", methods=["POST"])
+@login_required
+def api_assign_match(mid):
+    """본선 대진표 관리자 수동 편집: 특정 slot에 특정 유저 할당하거나 비움.
+    body: {slot: 1 or 2, user_id: int or null, partner_id: int or null}
+    - 관리자만 가능
+    - 예선 매치는 자동 진행이므로 수동 편집 불가 (혼란 방지)
+    - BYE 처리는 user_id=null 로 slot 비우기"""
+    m = Match.query.get_or_404(mid)
+    if not can_manage_tournament(current_user, m.tournament):
+        abort(403)
+    if m.stage != "main":
+        return jsonify({"error": "예선 매치는 자동으로 배치되므로 수동 편집이 불가합니다. 필요하면 예선을 재생성해주세요."}), 400
+    if m.status == "종료":
+        return jsonify({"error": "이미 종료된 경기는 편집할 수 없습니다. 먼저 '경기전으로 되돌리기'를 사용해주세요."}), 400
+
+    slot = request.json.get("slot")
+    if slot not in (1, 2):
+        return jsonify({"error": "slot 은 1 또는 2 여야 합니다."}), 400
+    user_id = request.json.get("user_id")
+    partner_id = request.json.get("partner_id")
+
+    if user_id is not None:
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "존재하지 않는 사용자입니다."}), 404
+
+    if slot == 1:
+        m.player1_id = user_id
+        m.player1_partner_id = partner_id
+    else:
+        m.player2_id = user_id
+        m.player2_partner_id = partner_id
+    db.session.commit()
+    socketio.emit("bracket_update", {"tournament_id": m.tournament_id},
+                   room=f"tournament_{m.tournament_id}")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/matches/<int:mid>/schedule", methods=["POST"])
+@login_required
+def api_schedule_match(mid):
+    """본선 매치의 코트 / 예정 시각 수동 설정 (관리자 전용)."""
+    m = Match.query.get_or_404(mid)
+    if not can_manage_tournament(current_user, m.tournament):
+        abort(403)
+    court = request.json.get("court")
+    scheduled_time = request.json.get("scheduled_time")
+    if court is not None:
+        m.court = str(court).strip() or None
+    if scheduled_time is not None:
+        m.scheduled_time = str(scheduled_time).strip() or None
+    db.session.commit()
+    socketio.emit("bracket_update", {"tournament_id": m.tournament_id},
+                   room=f"tournament_{m.tournament_id}")
+    return jsonify({"ok": True, "court": m.court, "scheduled_time": m.scheduled_time})
+
+
 @app.route("/api/matches/<int:mid>/reset", methods=["POST"])
 @login_required
 def api_reset_match(mid):
@@ -1789,24 +1900,6 @@ def api_get_draw(tid):
             "source_role": m.source_role,
         }
     return jsonify({"prelim": [m2d(m) for m in prelim], "main": [m2d(m) for m in main]})
-
-
-@app.route("/api/matches/<int:mid>/schedule", methods=["POST"])
-@login_required
-def api_schedule_match(mid):
-    """관리자가 경기에 코트 번호와 시간을 배정 (본선 코트진행 기능)"""
-    m = Match.query.get_or_404(mid)
-    if not can_manage_tournament(current_user, m.tournament):
-        abort(403)
-    data = request.json
-    m.court = data.get("court") or None
-    m.scheduled_time = data.get("scheduled_time") or None
-    if data.get("status"):
-        m.status = data["status"]
-    db.session.commit()
-    socketio.emit("bracket_update", {"tournament_id": m.tournament_id},
-                   room=f"tournament_{m.tournament_id}")
-    return jsonify({"ok": True})
 
 
 @app.route("/api/tournaments/<int:tid>/search")

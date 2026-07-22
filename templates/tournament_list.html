@@ -1,18 +1,43 @@
 {% extends "base.html" %}
-{% block title %}대회 전체 · 위단테{% endblock %}
+{% block title %}대회 목록 · 위단테{% endblock %}
 {% block content %}
-<span class="eyebrow">All Tournaments</span>
-<h1>대회 목록</h1>
+<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+  <div>
+    <span class="eyebrow">All Tournaments</span>
+    <h1 style="margin:6px 0 0;">🏆 대회</h1>
+  </div>
+  <a class="calendar-toggle" href="{{ url_for('tournament_calendar') }}">📅 캘린더로 보기</a>
+</div>
 
+<!-- 상태 필터 -->
+<div class="status-tabs">
+  <a class="status-tab {% if current_status == 'live' %}active{% endif %}"
+     href="{{ url_for('tournament_list_page', status='live', format=current_format) }}">🔴 진행중</a>
+  <a class="status-tab {% if current_status == 'open' %}active{% endif %}"
+     href="{{ url_for('tournament_list_page', status='open', format=current_format) }}">📝 접수중</a>
+  <a class="status-tab {% if current_status == 'closed' %}active{% endif %}"
+     href="{{ url_for('tournament_list_page', status='closed', format=current_format) }}">✓ 종료</a>
+  <a class="status-tab {% if current_status == 'all' %}active{% endif %}"
+     href="{{ url_for('tournament_list_page', status='all', format=current_format) }}">전체</a>
+</div>
+
+<!-- 종목 필터 -->
 <div class="format-tabs">
+  <a class="format-tab {% if current_format == 'all' %}active{% endif %}"
+     href="{{ url_for('tournament_list_page', status=current_status, format='all') }}">모든 종목</a>
   <a class="format-tab {% if current_format == 'singles' %}active{% endif %}"
-     href="{{ url_for('tournament_list_page', format='singles') }}">🎾 단식</a>
+     href="{{ url_for('tournament_list_page', status=current_status, format='singles') }}">🎾 단식</a>
   <a class="format-tab {% if current_format == 'doubles' %}active{% endif %}"
-     href="{{ url_for('tournament_list_page', format='doubles') }}">🎾🎾 복식</a>
+     href="{{ url_for('tournament_list_page', status=current_status, format='doubles') }}">🎾🎾 복식</a>
 </div>
 
 <p style="font-size:13px;color:var(--ink-faint);margin:0 0 16px;">
-  최신 대회부터 날짜 순서대로 표시됩니다. ({{ tournaments|length }}개)
+  {% if current_status == 'live' %}오늘 열리는 대회
+  {% elif current_status == 'open' %}참가 신청을 받는 대회
+  {% elif current_status == 'closed' %}종료된 대회
+  {% else %}전체 대회
+  {% endif %}
+  · 총 {{ tournaments|length }}개
 </p>
 
 <div class="tournament-list">
@@ -23,9 +48,7 @@
       <strong>{{ t.title }}</strong>
       <div class="meta">
         {{ t.event_date or '날짜 미정' }} · {{ t.location or '장소 미정' }} · 참가비 {{ "{:,}".format(t.entry_fee) }}원
-        {% if t.winner_id %}
-          · <span style="color:var(--primary);font-weight:700;">🏆 우승자 있음</span>
-        {% endif %}
+        {% if t.format %} · {{ '단식' if t.format == 'singles' else '복식' }}{% endif %}
       </div>
     </div>
     <span class="badge {% if t.status in ['접수마감','종료'] %}closed{% elif t.status == '진행중' %}live{% endif %}">{{ t.status }}</span>
@@ -33,26 +56,52 @@
   {% else %}
   <div class="card" style="text-align:center;padding:40px 20px;">
     <p style="color:var(--ink-faint);margin:0;">
-      {{ '단식' if current_format == 'singles' else '복식' }} 대회가 아직 없습니다.
+      {% if current_status == 'live' %}오늘 진행되는
+      {% elif current_status == 'open' %}접수 중인
+      {% elif current_status == 'closed' %}종료된
+      {% else %}등록된
+      {% endif %}
+      {{ '단식' if current_format == 'singles' else ('복식' if current_format == 'doubles' else '') }} 대회가 없습니다.
     </p>
   </div>
   {% endfor %}
 </div>
 
 <style>
-.format-tabs {
-  display: flex; gap: 8px; margin: 0 0 20px;
-  border-bottom: 2px solid var(--border);
+.calendar-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 14px; font-size: 13px; font-weight: 700;
+  background: linear-gradient(135deg, #f0f7ff, #e8f2ff);
+  color: var(--blue); border: 1px solid #c5dbf6;
+  border-radius: 999px; text-decoration: none;
+  transition: all .2s var(--ease);
 }
+.calendar-toggle:hover {
+  background: linear-gradient(135deg, #dbeafe, #bfdbfe);
+  transform: translateY(-2px); box-shadow: var(--shadow-sm);
+}
+.status-tabs { display: flex; gap: 6px; margin: 0 0 12px; flex-wrap: wrap; }
+.status-tab {
+  padding: 8px 14px; text-decoration: none;
+  color: var(--ink-soft); font-weight: 700; font-size: 13px;
+  border-radius: 999px; background: var(--surface);
+  border: 1px solid var(--border);
+  transition: all .2s var(--ease);
+}
+.status-tab:hover { border-color: var(--primary); color: var(--primary); }
+.status-tab.active {
+  background: var(--primary); color: #fff;
+  border-color: var(--primary);
+  box-shadow: 0 4px 12px rgba(14, 159, 140, .25);
+}
+.format-tabs { display: flex; gap: 8px; margin: 0 0 20px; border-bottom: 2px solid var(--border); }
 .format-tab {
-  padding: 12px 24px; text-decoration: none;
-  color: var(--ink-faint); font-weight: 700; font-size: 15px;
+  padding: 10px 18px; text-decoration: none;
+  color: var(--ink-faint); font-weight: 700; font-size: 14px;
   border-bottom: 3px solid transparent; margin-bottom: -2px;
   transition: all .2s var(--ease);
 }
 .format-tab:hover { color: var(--ink); }
-.format-tab.active {
-  color: var(--primary); border-bottom-color: var(--primary);
-}
+.format-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
 </style>
 {% endblock %}

@@ -186,6 +186,37 @@
       </div>
     </div>
 
+    <!-- 코트/시간 편집 (모든 매치 공통) -->
+    <div class="field" style="border-top:1px dashed var(--border);padding-top:12px;margin-top:12px;">
+      <label style="font-size:13px;color:var(--ink-soft);">🕐 코트 · 예정 시각 (선택)</label>
+      <div class="card-row" style="gap:8px;">
+        <input id="score-court-input" placeholder="코트 (예: 1, A, 하드)" style="flex:1;padding:10px;border:1px solid var(--border-strong);border-radius:6px;font:inherit;">
+        <input id="score-time-input" placeholder="시각 (예: 14:30)" style="flex:1;padding:10px;border:1px solid var(--border-strong);border-radius:6px;font:inherit;">
+      </div>
+    </div>
+
+    <!-- 본선 전용: 선수 수동 배정 (예선에서는 자동 진출이라 숨김) -->
+    <div id="score-assign-section" class="field" style="border-top:1px dashed var(--border);padding-top:12px;margin-top:12px;display:none;">
+      <label style="font-size:13px;color:var(--ink-soft);">👥 선수 배정 (본선 수동 편집)</label>
+      <p style="font-size:11px;color:var(--ink-faint);margin:0 0 8px;">전화번호 또는 이름을 검색해 슬롯에 배정할 수 있습니다. 비워두면 부전승(BYE) 처리.</p>
+      <div style="margin-bottom:8px;">
+        <label style="font-size:12px;font-weight:700;">Slot 1</label>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <input id="assign-p1-search" placeholder="이름/전화번호 검색..." style="flex:1;padding:8px;border:1px solid var(--border);border-radius:6px;font:inherit;font-size:13px;">
+          <button class="secondary" onclick="assignSlot(1, null)" style="padding:6px 10px;font-size:12px;">BYE로 비우기</button>
+        </div>
+        <div id="assign-p1-results" style="max-height:120px;overflow-y:auto;margin-top:4px;"></div>
+      </div>
+      <div>
+        <label style="font-size:12px;font-weight:700;">Slot 2</label>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <input id="assign-p2-search" placeholder="이름/전화번호 검색..." style="flex:1;padding:8px;border:1px solid var(--border);border-radius:6px;font:inherit;font-size:13px;">
+          <button class="secondary" onclick="assignSlot(2, null)" style="padding:6px 10px;font-size:12px;">BYE로 비우기</button>
+        </div>
+        <div id="assign-p2-results" style="max-height:120px;overflow-y:auto;margin-top:4px;"></div>
+      </div>
+    </div>
+
     <div class="card-row" style="gap:8px;margin-top:16px;">
       <button onclick="saveScore()" style="flex:1;">💾 저장</button>
       <button class="secondary" onclick="markInProgress()" id="score-live-btn">▶ 진행중으로</button>
@@ -622,22 +653,52 @@ function renderMain(matches) {
         return `<span class="name">${displayName ? escapeHtml(displayName) : '?'}</span>`;
       };
 
-      const p1 = nameOrPlaceholder(m.player1, m.player1_partner, m.player1_source_group, m.player1_source_rank);
-      const p2 = nameOrPlaceholder(m.player2, m.player2_partner, m.player2_source_group, m.player2_source_rank);
+      const p1Display = nameOrPlaceholder(m.player1, m.player1_partner, m.player1_source_group, m.player1_source_rank);
+      const p2Display = nameOrPlaceholder(m.player2, m.player2_partner, m.player2_source_group, m.player2_source_rank);
+
+      // 스코어를 각 선수 옆에 세트별로 배분
+      // 예: score="6-4" 이고 승자가 p1이면 p1=6, p2=4
+      //     score="6-3, 6-4" 이면 p1=[6,6], p2=[3,4] (승자가 p1인 경우)
+      function parseScoreForSlot(score, isWinnerSlot) {
+        if (!score) return '';
+        const sets = score.split(/[,\s]+/).filter(s => s.trim());
+        const nums = sets.map(s => {
+          const m = s.match(/^(\d+)-(\d+)/);
+          if (!m) return null;
+          const [_, a, b] = m;
+          return isWinnerSlot ? Math.max(+a, +b) : Math.min(+a, +b);
+        }).filter(n => n !== null);
+        return nums.join(' ');
+      }
+      const p1IsWinner = m.winner_id && m.winner_id === m.player1_id;
+      const p2IsWinner = m.winner_id && m.winner_id === m.player2_id;
+      const p1Score = isDone && m.score ? parseScoreForSlot(m.score, p1IsWinner) : '';
+      const p2Score = isDone && m.score ? parseScoreForSlot(m.score, p2IsWinner) : '';
+
       const bothSet = !!(m.player1_id && m.player2_id);
       const canEdit = IS_MANAGER && bothSet;
-      const clickAttr = canEdit ? `onclick="openScoreModal(${m.id})" style="cursor:pointer;"` : '';
-      const scoreLine = m.score
-        ? `<div style="font-size:10px;color:var(--ink-soft);margin-top:2px;text-align:center;">${escapeHtml(m.score)}</div>`
-        : '';
+      // 본선: 관리자면 항상 클릭 가능 (선수 배정도 가능하게 - 다음 왕복 편집 모달)
+      const clickAttr = IS_MANAGER ? `onclick="openScoreModal(${m.id})" style="cursor:pointer;"` : '';
+
       const timeLine = m.scheduled_time
         ? `<div style="font-size:9px;color:var(--ink-faint);text-align:center;">🕐 ${escapeHtml(m.scheduled_time)}${m.court ? ' · 코트'+escapeHtml(m.court) : ''}</div>`
         : (m.court ? `<div style="font-size:9px;color:var(--ink-faint);text-align:center;">코트 ${escapeHtml(m.court)}</div>` : '');
+
+      // 진행중 표시
+      const liveTag = m.status === '진행중'
+        ? `<div style="font-size:9px;color:#10b981;font-weight:800;text-align:center;">● 경기중</div>` : '';
+
       return `
-      <div class="bracket-match ${isDone ? 'done' : ''}" ${clickAttr}>
-        <div class="p ${m.winner_id && m.winner_id === m.player1_id ? 'win' : ''}">${p1}</div>
-        <div class="p ${m.winner_id && m.winner_id === m.player2_id ? 'win' : ''}">${p2}</div>
-        ${scoreLine}${timeLine}
+      <div class="bracket-match ${isDone ? 'done' : ''} ${m.status === '진행중' ? 'live' : ''}" ${clickAttr}>
+        <div class="p ${p1IsWinner ? 'win' : ''}">
+          ${p1Display}
+          ${p1Score ? `<span class="set-scores">${escapeHtml(p1Score)}</span>` : ''}
+        </div>
+        <div class="p ${p2IsWinner ? 'win' : ''}">
+          ${p2Display}
+          ${p2Score ? `<span class="set-scores">${escapeHtml(p2Score)}</span>` : ''}
+        </div>
+        ${liveTag}${timeLine}
       </div>`;
     }).join("");
     el.appendChild(col);
@@ -665,9 +726,6 @@ function openScoreModal(mid) {
       const all = data.prelim.concat(data.main);
       const m = all.find(x => x.id === mid);
       if (!m) { toast("매치를 찾을 수 없습니다.", "error"); return; }
-      if (!m.player1_id || !m.player2_id) {
-        toast("아직 상대가 정해지지 않은 경기입니다.", "error"); return;
-      }
       scoreModalMatchId = mid;
       scoreModalMatch = m;
       scoreModalWinnerSlot = m.winner_id === m.player1_id ? 1
@@ -679,19 +737,41 @@ function openScoreModal(mid) {
       if (m.scheduled_time) meta.push(m.scheduled_time);
       meta.push(`상태: ${m.status}`);
 
-      document.getElementById("score-modal-title").innerText = "경기 결과 입력";
+      document.getElementById("score-modal-title").innerText = m.stage === 'main' ? "본선 경기 편집" : "경기 결과 입력";
       document.getElementById("score-modal-meta").innerText = meta.join(" · ");
       document.getElementById("score-input").value = m.score || "";
-      document.getElementById("score-p1-name").innerText = teamLabel(m.player1, m.player1_partner);
-      document.getElementById("score-p2-name").innerText = teamLabel(m.player2, m.player2_partner);
+      document.getElementById("score-court-input").value = m.court || "";
+      document.getElementById("score-time-input").value = m.scheduled_time || "";
+      const p1Label = m.player1 ? teamLabel(m.player1, m.player1_partner) : (m.stage === 'main' ? '(비어있음)' : '?');
+      const p2Label = m.player2 ? teamLabel(m.player2, m.player2_partner) : (m.stage === 'main' ? '(비어있음)' : '?');
+      document.getElementById("score-p1-name").innerText = p1Label;
+      document.getElementById("score-p2-name").innerText = p2Label;
       updateWinnerButtons();
-      document.getElementById("score-live-btn").style.display = m.status === '종료' ? 'none' : '';
-      // 진행중/종료 상태에서만 되돌리기 버튼 노출
+
+      // 본선 매치면 선수 편집 섹션 노출
+      const isMain = m.stage === 'main';
+      document.getElementById("score-assign-section").style.display = isMain ? '' : 'none';
+      // 본선이고 양쪽 슬롯 비어있으면 승자/점수 입력 대신 배정만 유도
+      const bothSet = !!(m.player1_id && m.player2_id);
+      document.querySelector('label[for="score-input"], .field:has(#score-input)').style.opacity = bothSet ? '1' : '0.4';
+      document.getElementById("score-input").disabled = !bothSet;
+      document.getElementById("score-winner-p1").disabled = !bothSet;
+      document.getElementById("score-winner-p2").disabled = !bothSet;
+
+      // 검색창 초기화
+      if (isMain) {
+        document.getElementById("assign-p1-search").value = '';
+        document.getElementById("assign-p2-search").value = '';
+        document.getElementById("assign-p1-results").innerHTML = '';
+        document.getElementById("assign-p2-results").innerHTML = '';
+      }
+
+      document.getElementById("score-live-btn").style.display = m.status === '종료' ? 'none' : (bothSet ? '' : 'none');
       document.getElementById("score-reset-btn").style.display =
         (m.status === '진행중' || m.status === '종료') ? '' : 'none';
       document.getElementById("score-modal-error").style.display = "none";
       document.getElementById("score-modal").style.display = "flex";
-      setTimeout(() => document.getElementById("score-input").focus(), 100);
+      setTimeout(() => document.getElementById(bothSet ? "score-input" : "assign-p1-search").focus(), 100);
     });
 }
 function closeScoreModal() {
@@ -729,30 +809,97 @@ function normalizeScore(input) {
 
 function saveScore() {
   let score = document.getElementById("score-input").value.trim();
-  score = normalizeScore(score);   // "63" → "6-3" 자동 변환
+  score = normalizeScore(score);
+  const court = document.getElementById("score-court-input").value.trim();
+  const scheduledTime = document.getElementById("score-time-input").value.trim();
   const errEl = document.getElementById("score-modal-error");
   errEl.style.display = "none";
-  if (!scoreModalWinnerSlot) {
-    errEl.innerText = "승자를 선택해주세요.";
-    errEl.style.display = "block";
-    return;
-  }
-  if (!score) {
-    errEl.innerText = "스코어를 입력해주세요. (예: 63 또는 6-3, 6-4)";
-    errEl.style.display = "block";
-    return;
-  }
-  const winnerId = scoreModalWinnerSlot === 1 ? scoreModalMatch.player1_id : scoreModalMatch.player2_id;
-  apiPost(`/api/matches/${scoreModalMatchId}/score`, {winner_id: winnerId, score})
+
+  // 코트/시각만 편집 후 저장 (승자/점수 없이 그것만 변경)
+  const bothSet = !!(scoreModalMatch.player1_id && scoreModalMatch.player2_id);
+  const wantsScoreSave = score || scoreModalWinnerSlot;
+
+  // 코트/시각 저장 (항상 시도)
+  const scheduleP = (court !== (scoreModalMatch.court || '') || scheduledTime !== (scoreModalMatch.scheduled_time || ''))
+    ? apiPost(`/api/matches/${scoreModalMatchId}/schedule`, {court, scheduled_time: scheduledTime})
+    : Promise.resolve();
+
+  scheduleP
     .then(() => {
-      toast("경기 결과 저장 완료", "success");
-      closeScoreModal();
-      loadDraw();
+      if (!wantsScoreSave) {
+        toast("코트/시각 저장 완료", "success");
+        closeScoreModal(); loadDraw();
+        return;
+      }
+      if (!bothSet) {
+        errEl.innerText = "본선 매치는 먼저 선수를 배정해주세요.";
+        errEl.style.display = "block";
+        return;
+      }
+      if (!scoreModalWinnerSlot) {
+        errEl.innerText = "승자를 선택해주세요.";
+        errEl.style.display = "block";
+        return;
+      }
+      if (!score) {
+        errEl.innerText = "스코어를 입력해주세요. (예: 63 또는 6-3, 6-4)";
+        errEl.style.display = "block";
+        return;
+      }
+      const winnerId = scoreModalWinnerSlot === 1 ? scoreModalMatch.player1_id : scoreModalMatch.player2_id;
+      return apiPost(`/api/matches/${scoreModalMatchId}/score`, {winner_id: winnerId, score})
+        .then(() => {
+          toast("경기 결과 저장 완료", "success");
+          closeScoreModal();
+          loadDraw();
+        });
     })
     .catch(err => {
       errEl.innerText = err.message;
       errEl.style.display = "block";
     });
+}
+
+// ---- 본선 매치 선수 수동 배정 (검색 → 선택) ----
+let assignSearchTimer = {};
+function setupAssignSearch(slot) {
+  const inp = document.getElementById(`assign-p${slot}-search`);
+  inp.oninput = () => {
+    clearTimeout(assignSearchTimer[slot]);
+    assignSearchTimer[slot] = setTimeout(() => runAssignSearch(slot), 250);
+  };
+}
+setupAssignSearch(1); setupAssignSearch(2);
+
+function runAssignSearch(slot) {
+  const q = document.getElementById(`assign-p${slot}-search`).value.trim();
+  const box = document.getElementById(`assign-p${slot}-results`);
+  if (q.length < 2) { box.innerHTML = ''; return; }
+  fetch(`/api/tournaments/${TID}/participants-search?q=${encodeURIComponent(q)}`)
+    .then(r => r.json())
+    .then(d => {
+      if (!d.results || !d.results.length) {
+        box.innerHTML = '<p style="font-size:11px;color:var(--ink-faint);padding:4px;">일치하는 참가자 없음</p>';
+        return;
+      }
+      box.innerHTML = d.results.map(u => `
+        <div style="padding:6px 8px;background:#fff;border:1px solid var(--border);border-radius:6px;margin-bottom:3px;font-size:12px;display:flex;justify-content:space-between;align-items:center;">
+          <span><strong>${escapeHtml(u.name)}</strong> <span style="color:var(--ink-faint);">${escapeHtml(u.phone || '')}</span></span>
+          <button class="secondary" style="padding:4px 10px;font-size:11px;" onclick="assignSlot(${slot}, ${u.id})">배정</button>
+        </div>
+      `).join('');
+    });
+}
+
+function assignSlot(slot, userId) {
+  if (!scoreModalMatchId) return;
+  apiPost(`/api/matches/${scoreModalMatchId}/assign`, {slot, user_id: userId})
+    .then(() => {
+      toast(userId ? `Slot ${slot} 선수 배정 완료` : `Slot ${slot} BYE 처리`, "success");
+      closeScoreModal();
+      loadDraw();
+    })
+    .catch(err => toast(err.message, "error"));
 }
 function markInProgress() {
   if (!scoreModalMatchId) return;

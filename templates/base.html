@@ -21,8 +21,6 @@
     <span class="brand-word">위단테</span>
   </a>
   <nav>
-    <a href="{{ url_for('tournament_list_page') }}">대회</a>
-    <a href="{{ url_for('tournament_calendar') }}">대회 캘린더</a>
     {% if current_user.is_authenticated %}
       <a class="nav-me" href="{{ url_for('profile') }}" title="내 정보">
         <span class="nav-user-chip">{{ current_user.name[0] }}</span>

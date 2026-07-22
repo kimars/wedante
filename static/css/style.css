@@ -565,6 +565,10 @@ h2::before { content: ""; width: 7px; height: 20px; border-radius: 4px; backgrou
 .mini-feature-card.analyze:hover {
   background: linear-gradient(135deg, #f0f2ff 0%, #f8fafd 100%);
 }
+.mini-feature-card.tournaments { border-left: 4px solid #f59e0b; }
+.mini-feature-card.tournaments:hover {
+  background: linear-gradient(135deg, #fef3c7 0%, #fffbeb 100%);
+}
 .mini-feature-card.game { border-left: 4px solid #10b981; }
 .mini-feature-card.game:hover {
   background: linear-gradient(135deg, #ecfdf5 0%, #f8fafd 100%);
@@ -815,6 +819,14 @@ button.loading::after {
   flex-shrink: 0; margin-left: 4px;
   font-family: var(--font-mono);
 }
+.bracket-match .p .set-scores {
+  font-family: var(--font-mono); font-weight: 800;
+  font-size: 12px; color: var(--ink-soft);
+  flex-shrink: 0; margin-left: 6px;
+  letter-spacing: 1.5px;
+}
+.bracket-match .p.win .set-scores { color: var(--primary); }
+.bracket-match.live { border-left-color: #10b981; box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.15); }
 .bracket-match .p.win { font-weight: 800; color: var(--ink); }
 .bracket-match .p.win .source-tag { color: var(--primary); }
 
