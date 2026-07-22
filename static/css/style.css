@@ -799,35 +799,69 @@ button.loading::after {
 }
 .bracket-match {
   background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--blue);
-  border-radius: 6px; padding: 6px 8px;
+  border-radius: 6px; padding: 8px 10px;
   font-size: 11px; color: var(--ink-soft);
   box-shadow: var(--shadow-xs);
   transition: transform .25s var(--ease), box-shadow .25s var(--ease), border-color .25s var(--ease);
-  min-height: 42px;
-  margin: 4px 0;   /* 매치 간 최소 간격만 */
+  min-height: 62px;   /* 모든 매치 동일 최소 높이 → 라운드 간 정렬 유지 */
+  margin: 4px 0;
+  position: relative;
+  display: flex; flex-direction: column;
 }
 .bracket-match:hover { transform: translateX(2px); box-shadow: var(--shadow-sm); border-color: var(--primary); }
 .bracket-match.done { border-left-color: var(--primary); }
 .bracket-match .p {
-  display: flex; justify-content: space-between; padding: 1px 0;
-  font-size: 11px; line-height: 1.4;
-  min-width: 0;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 1px 0;
+  font-size: 12px; line-height: 1.4;
+  min-width: 0; gap: 6px;
 }
-.bracket-match .p .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bracket-match .p .name {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  text-align: left;
+}
+.bracket-match .p .name.placeholder { color: var(--ink-faint); font-weight: 500; }
 .bracket-match .p .source-tag {
-  font-size: 9px; color: var(--ink-faint); font-weight: 700;
-  flex-shrink: 0; margin-left: 4px;
+  font-size: 10px; color: var(--ink-faint); font-weight: 700;
+  flex-shrink: 0;
   font-family: var(--font-mono);
+  text-align: right;
 }
 .bracket-match .p .set-scores {
   font-family: var(--font-mono); font-weight: 800;
-  font-size: 12px; color: var(--ink-soft);
-  flex-shrink: 0; margin-left: 6px;
-  letter-spacing: 1.5px;
+  font-size: 13px; color: var(--ink-soft);
+  flex-shrink: 0; margin-left: 4px;
+  letter-spacing: 1px;
+  min-width: 20px; text-align: right;
 }
+.bracket-match .p.win { font-weight: 800; color: var(--primary); }
+.bracket-match .p.win .name { color: var(--primary); }
 .bracket-match .p.win .set-scores { color: var(--primary); }
+.bracket-match .p.win .source-tag { color: var(--primary); opacity: 0.8; }
+
 .bracket-match.live { border-left-color: #10b981; box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.15); }
-.bracket-match .p.win { font-weight: 800; color: var(--ink); }
+
+/* 코트 뱃지 - 우측 상단 절대 위치, 매치 높이 안 늘림 */
+.bracket-court-tag {
+  position: absolute; top: -6px; right: 6px;
+  font-size: 9px; font-weight: 800;
+  background: linear-gradient(135deg, var(--primary), #0B7A6B);
+  color: #fff; padding: 2px 6px; border-radius: 999px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+  z-index: 2;
+}
+
+/* 상태 라인 (하단, 자리 유지용) */
+.bracket-status {
+  font-size: 10px; font-weight: 700;
+  text-align: center; padding-top: 4px;
+  min-height: 14px;
+  color: transparent;   /* 기본은 투명 → 자리만 유지 */
+}
+.bracket-status.live { color: #10b981; }
+.bracket-status .live-timer {
+  font-family: var(--font-mono); font-weight: 800; margin-left: 2px;
+}
 .bracket-match .p.win .source-tag { color: var(--primary); }
 
 /* 라운드 수가 많은 경우 - 자동 축소 */
@@ -841,20 +875,29 @@ button.loading::after {
 }
 .bracket.compact-32 .bracket-match,
 .bracket.compact-64 .bracket-match {
-  padding: 3px 5px; font-size: 9.5px; min-height: 28px;
+  padding: 5px 6px; font-size: 9.5px; min-height: 46px;
   border-radius: 4px; margin: 2px 0;
 }
 .bracket.compact-32 .bracket-match .p,
 .bracket.compact-64 .bracket-match .p {
-  font-size: 9.5px; padding: 0;
+  font-size: 10px; padding: 0;
 }
 .bracket.compact-32 .bracket-match .source-tag,
 .bracket.compact-64 .bracket-match .source-tag {
-  font-size: 8px;
+  font-size: 8.5px;
+}
+.bracket.compact-32 .bracket-match .set-scores,
+.bracket.compact-64 .bracket-match .set-scores {
+  font-size: 11px;
+}
+.bracket.compact-32 .bracket-match .bracket-status,
+.bracket.compact-64 .bracket-match .bracket-status {
+  font-size: 8.5px; min-height: 12px; padding-top: 2px;
 }
 .bracket.compact-64 .bracket-round { min-width: 82px; }
-.bracket.compact-64 .bracket-match { padding: 2px 4px; font-size: 8.5px; min-height: 22px; }
-.bracket.compact-64 .bracket-match .p { font-size: 8.5px; }
+.bracket.compact-64 .bracket-match { padding: 3px 5px; font-size: 8.5px; min-height: 40px; }
+.bracket.compact-64 .bracket-match .p { font-size: 9px; }
+.bracket.compact-64 .bracket-match .set-scores { font-size: 10px; }
 
 @media (max-width: 640px) {
   .bracket { padding: 8px 4px 20px; }
