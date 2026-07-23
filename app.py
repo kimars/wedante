@@ -1578,6 +1578,47 @@ def _advance_prelim_winner_loser(m: Match):
     db.session.flush()
 
 
+def _calculate_group_ranking(matches):
+    """조 매치 리스트를 받아 순위 목록을 반환. side-effect 없음.
+    조가 아직 종료되지 않았거나 참가자 없으면 [] 반환.
+    반환값: [{user_id, name, wins}, ...] - 순위순"""
+    if not matches or any(x.status != "종료" for x in matches):
+        return []
+    all_players = set()
+    for m in matches:
+        if m.player1_id: all_players.add(m.player1_id)
+        if m.player2_id: all_players.add(m.player2_id)
+    if not all_players:
+        return []
+
+    wins = {pid: 0 for pid in all_players}
+    for m in matches:
+        if m.winner_id and m.winner_id in wins:
+            wins[m.winner_id] += 1
+
+    def head_to_head(a, b):
+        for m in matches:
+            if ((m.player1_id == a and m.player2_id == b) or
+                (m.player1_id == b and m.player2_id == a)):
+                if m.winner_id == a: return 1
+                if m.winner_id == b: return -1
+        return 0
+
+    ranked = sorted(all_players, key=lambda p: -wins[p])
+    from itertools import groupby
+    final_order = []
+    for _, grp in groupby(ranked, key=lambda p: wins[p]):
+        grp = list(grp)
+        if len(grp) > 1:
+            grp.sort(key=lambda p: -sum(1 for q in grp if q != p and head_to_head(p, q) > 0))
+        final_order.extend(grp)
+
+    # 이름 조회
+    users = {u.id: u for u in User.query.filter(User.id.in_(final_order)).all()}
+    return [{"user_id": pid, "name": users[pid].name if pid in users else "?",
+              "wins": wins[pid]} for pid in final_order]
+
+
 def _finalize_prelim_group(tournament_id: int, group_no: int):
     """조 내 모든 경기가 끝나면 조 1위, 2위를 자동 결정하여 본선 첫 라운드에 배치한다.
     반환값: (winner_user_id, runner_up_user_id) 또는 None
@@ -1946,7 +1987,23 @@ def api_get_draw(tid):
             "source_match_id": m.source_match_id,
             "source_role": m.source_role,
         }
-    return jsonify({"prelim": [m2d(m) for m in prelim], "main": [m2d(m) for m in main]})
+    # 각 조의 순위 (조 종료 시)
+    from collections import defaultdict
+    prelim_by_group = defaultdict(list)
+    for m in prelim:
+        if m.group_no:
+            prelim_by_group[m.group_no].append(m)
+    group_rankings = {}
+    for gno, ms in prelim_by_group.items():
+        ranking = _calculate_group_ranking(ms)
+        if ranking:
+            group_rankings[gno] = ranking
+
+    return jsonify({
+        "prelim": [m2d(m) for m in prelim],
+        "main": [m2d(m) for m in main],
+        "group_rankings": group_rankings,
+    })
 
 
 @app.route("/api/tournaments/<int:tid>/search")

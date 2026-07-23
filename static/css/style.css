@@ -303,6 +303,50 @@ a { color: inherit; text-decoration: none; transition: color .22s var(--ease), o
 }
 .prelim-group-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-sm); }
 .prelim-group-card.group-done { opacity: .75; }
+
+/* ---- 조 순위 결과 박스 (조 종료 시 표시) ---- */
+.group-ranking-box {
+  margin-top: 10px; padding: 10px 12px;
+  background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%);
+  border-radius: 8px; border: 1px solid #86efac;
+  animation: card-in .4s var(--ease) backwards;
+}
+.group-ranking-box .ranking-title {
+  font-size: 11px; font-weight: 800; color: #059669;
+  margin-bottom: 6px; letter-spacing: 0.5px;
+}
+.group-ranking-box .rank-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 4px 8px; margin-bottom: 3px;
+  background: #fff; border-radius: 6px;
+  font-size: 13px;
+}
+.group-ranking-box .rank-row.rank-1st {
+  background: linear-gradient(135deg, #fef3c7, #fde68a);
+  font-weight: 800; color: #92400e;
+  border: 1px solid #f59e0b;
+}
+.group-ranking-box .rank-row.rank-2nd {
+  background: #f3f4f6; font-weight: 700;
+  border: 1px solid #d1d5db;
+}
+.group-ranking-box .rank-row.rank-out {
+  background: #fef2f2; opacity: 0.75;
+  color: var(--ink-faint);
+}
+.group-ranking-box .rank-label {
+  font-size: 11px; font-weight: 800;
+  flex-shrink: 0;
+}
+.group-ranking-box .rank-name { flex: 1; text-align: left; margin: 0 8px; }
+.group-ranking-box .rank-wins {
+  font-family: var(--font-mono); font-size: 11px;
+  font-weight: 700; color: var(--ink-soft);
+}
+.group-ranking-box .ranking-note {
+  font-size: 10px; color: var(--ink-faint);
+  text-align: center; margin-top: 4px; font-style: italic;
+}
 .prelim-group-head {
   display: flex; justify-content: space-between; align-items: center;
   margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px dashed var(--border);
@@ -777,14 +821,14 @@ button.loading::after {
 
 /* ---------- Main bracket (본선 대진표) ---------- */
 .bracket {
-  display: flex; gap: 20px; overflow-x: auto;
+  display: flex; gap: 40px; overflow-x: auto;
   padding: 12px 4px 32px;
   align-items: stretch;
   min-height: 300px;
 }
 .bracket-round {
   display: flex; flex-direction: column;
-  min-width: 130px; flex: 0 0 auto;
+  min-width: 160px; flex: 0 0 auto;
   padding-top: 30px;
   position: relative;
 }
@@ -813,62 +857,64 @@ button.loading::after {
   box-shadow: var(--shadow-xs);
   transition: transform .25s var(--ease), box-shadow .25s var(--ease), border-color .25s var(--ease);
   min-height: 62px;
-  margin: 6px 0;
+  margin: 8px 0;
   position: relative;
   display: flex; flex-direction: column;
 }
 .bracket-match:hover { transform: translateX(2px); box-shadow: var(--shadow-sm); border-color: var(--primary); }
 .bracket-match.done { border-left-color: var(--primary); }
 
-/* ---- 브라켓 커넥터 라인 (pair 오른쪽에 ] 모양) ---- */
-/* 마지막 라운드가 아닌 라운드의 각 pair 오른쪽에 브라켓 모양 */
+/* ---- 브라켓 커넥터 라인 - 매치 A 중앙 ~ 매치 B 중앙 정확히 ---- */
+/* pair 안 매치는 min-height 62px + margin 8px 위아래
+   → pair 상단에서 매치 A 중앙까지 = 8 + 31 = 39px
+   → pair 하단에서 매치 B 중앙까지 = 8 + 31 = 39px */
 .bracket-round:not(:last-child) .match-pair {
-  padding-right: 12px;
+  padding-right: 20px;
 }
 .bracket-round:not(:last-child) .match-pair::before {
   content: '';
   position: absolute;
   right: 0;
-  top: 25%; bottom: 25%;
+  top: 39px;
+  bottom: 39px;
   border-right: 1.5px solid var(--ink-faint);
   pointer-events: none;
 }
-/* pair 위쪽 매치에서 나오는 가로선 */
-.bracket-round:not(:last-child) .match-pair > .bracket-match:first-child::after {
-  content: '';
-  position: absolute;
-  right: -12px;
-  top: 50%;
-  width: 12px;
-  height: 1.5px;
-  background: var(--ink-faint);
-  z-index: 1;
-}
-/* pair 아래쪽 매치에서 나오는 가로선 */
-.bracket-round:not(:last-child) .match-pair > .bracket-match:last-child::after {
-  content: '';
-  position: absolute;
-  right: -12px;
-  top: 50%;
-  width: 12px;
-  height: 1.5px;
-  background: var(--ink-faint);
-  z-index: 1;
-}
-/* pair 오른쪽 중앙에서 다음 라운드 매치로 뻗는 짧은 선 */
+/* pair 오른쪽 중앙에서 다음 라운드로 뻗는 가로선 */
 .bracket-round:not(:last-child) .match-pair::after {
   content: '';
   position: absolute;
-  right: -12px;
+  right: -20px;
   top: 50%;
-  width: 12px;
+  width: 20px;
   height: 1.5px;
   background: var(--ink-faint);
   z-index: 0;
 }
-/* 첫 라운드가 아닌 라운드의 매치들: 왼쪽 margin 확보 (연결선 여유) */
+/* 각 매치 오른쪽 중앙에서 세로선까지 가로선 */
+.bracket-round:not(:last-child) .match-pair > .bracket-match::after {
+  content: '';
+  position: absolute;
+  right: -20px;
+  top: 50%;
+  width: 20px;
+  height: 1.5px;
+  background: var(--ink-faint);
+  z-index: 1;
+}
+/* 첫 라운드가 아닌 라운드: 왼쪽 진입선 */
 .bracket-round:not(:first-child) .match-pair {
-  padding-left: 12px;
+  padding-left: 20px;
+}
+.bracket-round:not(:first-child) .match-pair > .bracket-match::before {
+  content: '';
+  position: absolute;
+  left: -20px;
+  top: 50%;
+  width: 20px;
+  height: 1.5px;
+  background: var(--ink-faint);
+  z-index: 1;
 }
 
 .bracket-match .p {
@@ -951,10 +997,23 @@ button.loading::after {
 }
 .bracket-match .p.win .source-tag { color: var(--primary); }
 
+/* ---- 복식 대회: 매치 카드 폭/높이 확대 (선수 두 명 이름 표기) ---- */
+.bracket.doubles .bracket-round { min-width: 210px; }
+.bracket.doubles .bracket-match {
+  min-height: 72px;
+  padding: 10px 12px;
+}
+.bracket.doubles .bracket-match .p {
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.bracket.doubles.compact-32 .bracket-round { min-width: 160px; }
+.bracket.doubles.compact-64 .bracket-round { min-width: 140px; }
+
 /* 라운드 수가 많은 경우 - 자동 축소 */
 .bracket.compact-32,
 .bracket.compact-64 {
-  gap: 12px;
+  gap: 20px;
 }
 .bracket.compact-32 .bracket-round,
 .bracket.compact-64 .bracket-round {
