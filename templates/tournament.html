@@ -272,6 +272,42 @@
 
 {% block scripts %}
 <script>
+// ============================================================
+// [디버그] 전역 에러 캡처 - JS 크래시 시 화면에 직접 표시
+// 사용자가 F12 없이도 문제 확인 가능. 프로덕션에서도 유지.
+// ============================================================
+window.addEventListener('error', function(e) {
+  const box = document.getElementById('prelim-groups') || document.getElementById('main-bracket');
+  if (box && !box.dataset.errorShown) {
+    box.dataset.errorShown = '1';
+    box.innerHTML = `<div style="background:#fef2f2;color:#b91c1c;padding:20px;border-radius:8px;border:2px solid #fca5a5;margin:16px 0;">
+      <strong style="font-size:16px;">🔴 페이지 로드 중 오류 발생</strong>
+      <p style="margin:8px 0 4px;font-family:monospace;font-size:12px;background:#fff;padding:8px;border-radius:4px;word-break:break-all;">
+        ${(e.message || 'unknown error').replace(/</g,'&lt;')}
+      </p>
+      <p style="margin:4px 0;font-size:11px;color:#7f1d1d;">
+        위치: <code>${(e.filename||'').split('/').pop()}:${e.lineno}:${e.colno}</code>
+      </p>
+      <p style="margin:8px 0 0;font-size:12px;color:#7f1d1d;">
+        이 메시지를 관리자에게 보내주세요.
+      </p>
+    </div>`;
+  }
+});
+window.addEventListener('unhandledrejection', function(e) {
+  console.error("Unhandled promise rejection:", e.reason);
+  const box = document.getElementById('prelim-groups');
+  if (box && !box.dataset.errorShown) {
+    box.dataset.errorShown = '1';
+    box.innerHTML = `<div style="background:#fef2f2;color:#b91c1c;padding:20px;border-radius:8px;border:2px solid #fca5a5;margin:16px 0;">
+      <strong style="font-size:16px;">🔴 비동기 처리 오류</strong>
+      <p style="margin:8px 0 0;font-family:monospace;font-size:12px;background:#fff;padding:8px;border-radius:4px;word-break:break-all;">
+        ${String(e.reason || 'unknown').replace(/</g,'&lt;')}
+      </p>
+    </div>`;
+  }
+});
+
 const TID = {{ t.id }};
 const IS_MANAGER = {{ 'true' if is_manager else 'false' }};
 const IS_DOUBLES = {{ "'doubles'" if t.format == 'doubles' else "''" }} === 'doubles';

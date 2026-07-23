@@ -1523,9 +1523,13 @@ def api_generate_draw(tid):
         # 재생성 시 이전 매치를 완전 삭제 (조 우승자 반영 상태 등 초기화)
         old_match_ids = [row[0] for row in db.session.query(Match.id).filter_by(tournament_id=t.id).all()]
         if old_match_ids:
-            # CallLog가 삭제될 매치를 참조 중이면 FK 위반이 나므로 참조를 먼저 끊는다
+            # 삭제할 매치를 참조하는 FK들을 먼저 정리 (FK 위반 방지)
+            # 1) CallLog.match_id → NULL 로
             CallLog.query.filter(CallLog.match_id.in_(old_match_ids)).update(
                 {"match_id": None}, synchronize_session=False)
+            # 2) ScheduledSms 는 매치가 없어지면 무의미하므로 완전 삭제
+            ScheduledSms.query.filter(ScheduledSms.match_id.in_(old_match_ids)).delete(
+                synchronize_session=False)
             Match.query.filter_by(tournament_id=t.id).delete(synchronize_session=False)
             db.session.commit()
         if manual_groups:
@@ -2433,6 +2437,7 @@ def api_delete_tournament(tid):
         TournamentParticipant.query.filter_by(tournament_id=tid).delete(synchronize_session=False)
         CallLog.query.filter_by(tournament_id=tid).delete(synchronize_session=False)
         SmsLog.query.filter_by(tournament_id=tid).delete(synchronize_session=False)
+        ScheduledSms.query.filter_by(tournament_id=tid).delete(synchronize_session=False)
         # Match 는 Tournament 의 cascade="all, delete-orphan" 로 함께 삭제됨
         db.session.delete(t)
         db.session.commit()
@@ -3127,6 +3132,7 @@ def reset_data(keep_banners, yes):
     TournamentParticipant.query.delete(synchronize_session=False)
     CallLog.query.delete(synchronize_session=False)
     SmsLog.query.delete(synchronize_session=False)
+    ScheduledSms.query.delete(synchronize_session=False)
     PhoneVerification.query.delete(synchronize_session=False)
     # Match 는 Tournament cascade 로 함께 삭제됨. 안전 위해 명시적으로 먼저.
     Match.query.delete(synchronize_session=False)
