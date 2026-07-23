@@ -1931,63 +1931,81 @@ def api_group_winner(tid, gno):
 
 @app.route("/api/tournaments/<int:tid>/draw")
 def api_get_draw(tid):
-    # N+1 방지: player1/player2 관계를 joinedload 로 한 번에 로드
-    prelim = (Match.query
-              .filter_by(tournament_id=tid, stage="prelim")
-              .options(joinedload(Match.player1), joinedload(Match.player2))
-              .order_by(Match.group_no, Match.seq_in_group.nulls_last())
-              .all())
-    main = (Match.query
-            .filter_by(tournament_id=tid, stage="main")
-            .options(joinedload(Match.player1), joinedload(Match.player2))
-            .all())
+    """대진표 조회 API. 어떤 예외가 나도 최소한 빈 구조라도 반환해서
+    일반 유저 화면에서 '대진표 불러오는 중...'에서 멈추지 않게 함."""
+    try:
+        prelim = (Match.query
+                  .filter_by(tournament_id=tid, stage="prelim")
+                  .options(joinedload(Match.player1), joinedload(Match.player2))
+                  .order_by(Match.group_no, Match.seq_in_group.nulls_last())
+                  .all())
+        main = (Match.query
+                .filter_by(tournament_id=tid, stage="main")
+                .options(joinedload(Match.player1), joinedload(Match.player2))
+                .all())
+    except Exception as e:
+        app.logger.error(f"draw API - 매치 조회 실패 (tid={tid}): {e}")
+        return jsonify({"prelim": [], "main": [], "group_rankings": {},
+                         "error": "매치 조회 중 오류가 발생했습니다."})
 
-    # 본선 첫 라운드 매치의 소스 조/순위 매핑 계산
-    # (예: 매치1 slot1 → 1조 1위, 매치1 slot2 → 2조 2위 등)
-    first_round_source = {}   # (match_id, slot) -> (group_no, rank)
-    if main:
-        first_round = _first_round_main_matches(tid)
-        groups_count = (db.session.query(func.count(func.distinct(Match.group_no)))
-                        .filter(Match.tournament_id == tid, Match.stage == "prelim").scalar()) or 0
-        t = Tournament.query.get(tid)
-        if first_round and groups_count > 0:
-            for gno in range(1, groups_count + 1):
-                for rank in (1, 2):
-                    idx, slot = _resolve_bracket_slot(t, gno, rank, groups_count, len(first_round))
-                    if 0 <= idx < len(first_round):
-                        first_round_source[(first_round[idx].id, slot)] = (gno, rank)
+    # 본선 첫 라운드 매치의 소스 조/순위 매핑 계산 (실패해도 계속 진행)
+    first_round_source = {}
+    try:
+        if main:
+            first_round = _first_round_main_matches(tid)
+            groups_count = (db.session.query(func.count(func.distinct(Match.group_no)))
+                            .filter(Match.tournament_id == tid, Match.stage == "prelim").scalar()) or 0
+            t = Tournament.query.get(tid)
+            if first_round and groups_count > 0:
+                for gno in range(1, groups_count + 1):
+                    for rank in (1, 2):
+                        try:
+                            idx, slot = _resolve_bracket_slot(t, gno, rank, groups_count, len(first_round))
+                            if 0 <= idx < len(first_round):
+                                first_round_source[(first_round[idx].id, slot)] = (gno, rank)
+                        except Exception as se:
+                            app.logger.warning(f"슬롯 계산 실패 (gno={gno}, rank={rank}): {se}")
+    except Exception as e:
+        app.logger.warning(f"first_round_source 계산 실패 (tid={tid}): {e}")
 
     def m2d(m):
-        p1_src = first_round_source.get((m.id, 1))
-        p2_src = first_round_source.get((m.id, 2))
-        return {
-            "id": m.id, "stage": m.stage, "group_no": m.group_no,
-            "seq_in_group": m.seq_in_group,
-            "round_name": m.round_name, "match_no": m.match_no,
-            "player1": m.player1.name if m.player1 else None,
-            "player1_id": m.player1_id,
-            "player1_partner": m.player1_partner.name if m.player1_partner else None,
-            "player1_partner_id": m.player1_partner_id,
-            "player1_is_bye": bool(m.player1_is_bye),
-            "player1_source_group": p1_src[0] if p1_src else None,
-            "player1_source_rank": p1_src[1] if p1_src else None,
-            "player2": m.player2.name if m.player2 else None,
-            "player2_id": m.player2_id,
-            "player2_partner": m.player2_partner.name if m.player2_partner else None,
-            "player2_partner_id": m.player2_partner_id,
-            "player2_is_bye": bool(m.player2_is_bye),
-            "player2_source_group": p2_src[0] if p2_src else None,
-            "player2_source_rank": p2_src[1] if p2_src else None,
-            "score": m.score, "status": m.status,
-            "winner_id": m.winner_id,
-            "court": m.court, "court_seq": m.court_seq,
-            "scheduled_time": m.scheduled_time,
-            "started_at": m.started_at.replace(tzinfo=timezone.utc).isoformat() if m.started_at else None,
-            "duration_min": m.duration_min or 20,
-            "source_match_id": m.source_match_id,
-            "source_role": m.source_role,
-        }
-    # 각 조의 순위 (조 종료 시) - 실패해도 매치 데이터는 반환
+        try:
+            p1_src = first_round_source.get((m.id, 1))
+            p2_src = first_round_source.get((m.id, 2))
+            return {
+                "id": m.id, "stage": m.stage, "group_no": m.group_no,
+                "seq_in_group": m.seq_in_group,
+                "round_name": m.round_name, "match_no": m.match_no,
+                "player1": m.player1.name if m.player1 else None,
+                "player1_id": m.player1_id,
+                "player1_partner": m.player1_partner.name if m.player1_partner else None,
+                "player1_partner_id": m.player1_partner_id,
+                # BYE 컬럼이 마이그레이션 안 됐어도 안전
+                "player1_is_bye": bool(getattr(m, "player1_is_bye", False) or False),
+                "player1_source_group": p1_src[0] if p1_src else None,
+                "player1_source_rank": p1_src[1] if p1_src else None,
+                "player2": m.player2.name if m.player2 else None,
+                "player2_id": m.player2_id,
+                "player2_partner": m.player2_partner.name if m.player2_partner else None,
+                "player2_partner_id": m.player2_partner_id,
+                "player2_is_bye": bool(getattr(m, "player2_is_bye", False) or False),
+                "player2_source_group": p2_src[0] if p2_src else None,
+                "player2_source_rank": p2_src[1] if p2_src else None,
+                "score": m.score, "status": m.status,
+                "winner_id": m.winner_id,
+                "court": m.court, "court_seq": m.court_seq,
+                "scheduled_time": m.scheduled_time,
+                "started_at": m.started_at.replace(tzinfo=timezone.utc).isoformat() if m.started_at else None,
+                "duration_min": m.duration_min or 20,
+                "source_match_id": m.source_match_id,
+                "source_role": m.source_role,
+            }
+        except Exception as e:
+            app.logger.warning(f"매치 직렬화 실패 (mid={getattr(m, 'id', '?')}): {e}")
+            return {"id": getattr(m, "id", 0), "stage": getattr(m, "stage", ""),
+                    "status": "경기전", "error": str(e)[:100]}
+
+    # 각 조 순위 계산 (실패해도 매치 데이터는 반환)
     group_rankings = {}
     try:
         from collections import defaultdict
@@ -2003,12 +2021,19 @@ def api_get_draw(tid):
             except Exception as e:
                 app.logger.warning(f"조 {gno} 순위 계산 실패: {e}")
     except Exception as e:
-        app.logger.warning(f"group_rankings 전체 계산 실패: {e}")
-        group_rankings = {}
+        app.logger.warning(f"group_rankings 계산 실패: {e}")
+
+    try:
+        prelim_dicts = [m2d(m) for m in prelim]
+        main_dicts = [m2d(m) for m in main]
+    except Exception as e:
+        app.logger.error(f"매치 리스트 직렬화 실패 (tid={tid}): {e}")
+        prelim_dicts = []
+        main_dicts = []
 
     return jsonify({
-        "prelim": [m2d(m) for m in prelim],
-        "main": [m2d(m) for m in main],
+        "prelim": prelim_dicts,
+        "main": main_dicts,
         "group_rankings": group_rankings,
     })
 
