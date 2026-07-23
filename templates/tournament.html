@@ -471,8 +471,25 @@ function loadDraw() {
   fetch(`/api/tournaments/${TID}/draw`)
     .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
     .then(data => {
-      renderPrelim(data.prelim || [], data.group_rankings || {});
-      renderMain(data.main || []);
+      // 로딩 문구 즉시 제거 (렌더 함수 크래시해도 사용자에게 보이지 않음)
+      try {
+        const pe = document.getElementById("prelim-groups");
+        if (pe && pe.innerHTML.includes("불러오는 중")) pe.innerHTML = "";
+        const me = document.getElementById("main-bracket");
+        if (me && me.innerHTML.includes("불러오는 중")) me.innerHTML = "";
+      } catch (_) {}
+      try { renderPrelim(data.prelim || [], data.group_rankings || {}); }
+      catch (e) {
+        console.error("renderPrelim 실패:", e);
+        const el = document.getElementById("prelim-groups");
+        if (el) el.innerHTML = `<p style="color:#e33;padding:20px;">예선 렌더링 오류: ${e.message}</p>`;
+      }
+      try { renderMain(data.main || []); }
+      catch (e) {
+        console.error("renderMain 실패:", e);
+        const el = document.getElementById("main-bracket");
+        if (el) el.innerHTML = `<p style="color:#e33;padding:20px;">본선 렌더링 오류: ${e.message}</p>`;
+      }
     })
     .catch(err => {
       console.error("Draw load failed:", err);
@@ -481,7 +498,9 @@ function loadDraw() {
         ⚠ 대진표를 불러오지 못했습니다. (${err.message})<br>
         <small style="color:var(--ink-faint);">잠시 후 페이지를 새로고침해주세요.</small>
       </p>`;
-      toast("대진표 로드 실패: " + err.message, "error");
+      const me = document.getElementById("main-bracket");
+      if (me) me.innerHTML = '';
+      if (typeof toast === "function") toast("대진표 로드 실패: " + err.message, "error");
     });
 }
 
@@ -918,16 +937,17 @@ function saveScore() {
     });
 }
 
-// ---- 본선 매치 선수 수동 배정 (검색 → 선택) ----
+// ---- 본선 매치 선수 수동 배정 (검색 → 선택) - 관리자 전용 ----
 let assignSearchTimer = {};
 function setupAssignSearch(slot) {
   const inp = document.getElementById(`assign-p${slot}-search`);
+  if (!inp) return;   // 일반 유저 페이지엔 편집 모달 자체가 없음
   inp.oninput = () => {
     clearTimeout(assignSearchTimer[slot]);
     assignSearchTimer[slot] = setTimeout(() => runAssignSearch(slot), 250);
   };
 }
-setupAssignSearch(1); setupAssignSearch(2);
+if (IS_MANAGER) { setupAssignSearch(1); setupAssignSearch(2); }
 
 function runAssignSearch(slot) {
   const q = document.getElementById(`assign-p${slot}-search`).value.trim();
