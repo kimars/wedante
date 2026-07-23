@@ -1153,6 +1153,10 @@ def tournament_page(tid):
                 group_rankings[gno] = ranking
         except Exception as e:
             app.logger.warning(f"조 {gno} 순위 계산 실패: {e}")
+    # 예선 진행률 (총 매치 수 대비 종료 매치 수)
+    prelim_total = len(prelim)
+    prelim_done = sum(1 for m in prelim if m.status == "종료")
+    prelim_pct = round((prelim_done * 100.0 / prelim_total), 1) if prelim_total else 0.0
     my_participation = None
     if current_user.is_authenticated:
         my_participation = TournamentParticipant.query.filter_by(
@@ -1163,6 +1167,8 @@ def tournament_page(tid):
                             call_types=CALL_TYPES, my_participation=my_participation,
                             participant_count=participant_count,
                             group_rankings=group_rankings,
+                            prelim_total=prelim_total, prelim_done=prelim_done,
+                            prelim_pct=prelim_pct,
                             is_manager=is_manager)
 
 

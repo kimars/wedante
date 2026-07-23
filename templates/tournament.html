@@ -249,9 +249,9 @@
 <div id="bracket-tab-prelim" class="bracket-tab-panel">
   <div class="prelim-header">
     <div class="prelim-progress">
-      예선 진행률 <strong id="prelim-progress-text">0.0%</strong>
-      <div class="prelim-progress-bar"><div class="prelim-progress-fill" id="prelim-progress-fill" style="width:0%;"></div></div>
-      <span class="prelim-progress-count" id="prelim-progress-count">0/0</span>
+      예선 진행률 <strong id="prelim-progress-text">{{ prelim_pct if prelim_pct is defined else 0.0 }}%</strong>
+      <div class="prelim-progress-bar"><div class="prelim-progress-fill" id="prelim-progress-fill" style="width:{{ prelim_pct if prelim_pct is defined else 0 }}%;"></div></div>
+      <span class="prelim-progress-count" id="prelim-progress-count">{{ prelim_done if prelim_done is defined else 0 }}/{{ prelim_total if prelim_total is defined else 0 }}</span>
     </div>
   </div>
   <div id="prelim-groups" class="prelim-groups">
