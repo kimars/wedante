@@ -258,9 +258,16 @@
     {% if groups %}
       {# 서버 사이드 초기 렌더 - JS 로드/실행 실패해도 최소한 이건 보임 #}
       {% for gno, ms in groups.items() %}
+      {% set rank = group_rankings.get(gno) if group_rankings else None %}
       <div class="prelim-group-card">
         <div class="prelim-group-head">
           <span class="prelim-group-title">{{ gno }}조</span>
+          {% if rank and rank|length >= 2 %}
+          <span style="margin-left:12px;font-size:12px;font-weight:700;">
+            <span style="color:#d97706;">🥇 1위 {{ rank[0].name }}</span>
+            <span style="color:#6b7280;margin-left:8px;">🥈 2위 {{ rank[1].name }}</span>
+          </span>
+          {% endif %}
         </div>
         {% for m in ms %}
         <div class="prelim-match-row">
@@ -288,6 +295,20 @@
           </div>
         </div>
         {% endfor %}
+        {# 조 결과 상세 박스 (3경기 다 종료된 조만) #}
+        {% if rank and rank|length >= 2 %}
+        <div class="group-ranking-box">
+          <div class="ranking-title">📊 조 결과</div>
+          {% for r in rank %}
+          <div class="rank-row {% if loop.index == 1 %}rank-1st{% elif loop.index == 2 %}rank-2nd{% else %}rank-out{% endif %}">
+            <span class="rank-label">{% if loop.index == 1 %}🥇 1위{% elif loop.index == 2 %}🥈 2위{% else %}❌ {{ loop.index }}위{% endif %}</span>
+            <span class="rank-name">{{ r.name }}</span>
+            <span class="rank-wins">{{ r.wins }}승</span>
+          </div>
+          {% endfor %}
+          <div class="ranking-note">1위·2위 본선 진출</div>
+        </div>
+        {% endif %}
       </div>
       {% endfor %}
     {% else %}

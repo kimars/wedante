@@ -545,9 +545,9 @@ function renderPrelimAdmin(matches) {
             <button class="secondary" style="padding:7px 10px;font-size:12px;" onclick="submitSchedule(${m.id}, 'p')">배정</button>
             ${bothSet && m.status !== '종료' && m.status !== '진행중' ? `<button class="secondary" style="padding:7px 10px;font-size:12px;background:#fff8e6;" onclick="startMatch(${m.id})">▶ 시작</button>` : ''}
             ${bothSet ? `
-              <input placeholder="6-3,6-4" id="pscore-${m.id}" style="width:90px;padding:6px;border:1px solid var(--border-strong);border-radius:8px;" value="${m.score || ''}">
-              <button class="secondary" onclick="submitPrelimScore(${m.id}, ${m.player1_id})">${escapeHtml(m.player1)} 승</button>
-              <button class="secondary" onclick="submitPrelimScore(${m.id}, ${m.player2_id})">${escapeHtml(m.player2)} 승</button>
+              <input placeholder="63만 입력해도 6-3" id="pscore-${m.id}" style="width:110px;padding:6px;border:1px solid var(--border-strong);border-radius:8px;" value="${m.score || ''}">
+              <button class="secondary" style="${m.winner_id === m.player1_id ? 'background:#0e9f8c;color:#fff;border-color:#0e9f8c;font-weight:800;' : ''}" onclick="submitPrelimScore(${m.id}, ${m.player1_id}, event)">${escapeHtml(m.player1)} 승</button>
+              <button class="secondary" style="${m.winner_id === m.player2_id ? 'background:#0e9f8c;color:#fff;border-color:#0e9f8c;font-weight:800;' : ''}" onclick="submitPrelimScore(${m.id}, ${m.player2_id}, event)">${escapeHtml(m.player2)} 승</button>
             ` : ''}
           </span>
         </div>`;
@@ -570,11 +570,38 @@ function submitSchedule(mid, prefix) {
     .catch((err) => toast(err.message, "error"));
 }
 
-function submitPrelimScore(mid, winnerId) {
+// "63" → "6-3", "63 64" → "6-3, 6-4" 자동 변환
+function normalizeScore(input) {
+  if (!input) return "";
+  return input.split(/[,\s/]+/).filter(s => s).map(s => {
+    if (s.includes('-')) return s;
+    if (/^\d{2}$/.test(s)) return s[0] + '-' + s[1];
+    if (/^\d{3}$/.test(s)) return s[0] + '-' + s.slice(1);
+    if (/^\d{4}$/.test(s)) return s[0] + '-' + s[1] + ', ' + s[2] + '-' + s[3];
+    return s;
+  }).join(', ');
+}
+
+function submitPrelimScore(mid, winnerId, ev) {
   if (!winnerId) { toast("아직 상대가 정해지지 않은 경기입니다.", "error"); return; }
-  const score = document.getElementById(`pscore-${mid}`).value;
+  const scoreEl = document.getElementById(`pscore-${mid}`);
+  let score = scoreEl ? scoreEl.value : "";
+  score = normalizeScore(score);
+  if (scoreEl) scoreEl.value = score;   // 화면에도 변환된 값 반영
+  // 클릭한 버튼 시각 강조 (즉시 피드백)
+  if (ev && ev.target) {
+    const btn = ev.target.closest('button');
+    if (btn && btn.parentElement) {
+      btn.parentElement.querySelectorAll('button').forEach(b => {
+        b.classList.remove('winner-selected');
+        b.style.background = ''; b.style.color = ''; b.style.borderColor = '';
+      });
+      btn.classList.add('winner-selected');
+      btn.style.background = '#0e9f8c'; btn.style.color = '#fff'; btn.style.borderColor = '#0e9f8c';
+    }
+  }
   apiPost(`/api/matches/${mid}/score`, {winner_id: winnerId, score})
-    .then(() => toast("경기 결과 저장. 다음 경기 대진에 자동 반영됩니다.", "success"))
+    .then(() => { toast("경기 결과 저장. 다음 경기 대진에 자동 반영됩니다.", "success"); loadDraw(); })
     .catch((err) => toast(err.message, "error"));
 }
 
@@ -611,18 +638,33 @@ function renderMainAdmin(matches) {
         <input placeholder="시간 09:00" id="mtime-${m.id}" style="width:78px;padding:6px;border:1px solid var(--border-strong);border-radius:8px;" value="${m.scheduled_time || ''}">
         <button class="secondary" style="padding:7px 10px;font-size:12px;" onclick="submitSchedule(${m.id}, 'm')">배정</button>
         ${bothSet ? `
-          <input placeholder="6-3,6-4" id="score-${m.id}" style="width:100px;padding:6px;border:1px solid var(--border-strong);border-radius:8px;" value="${m.score || ''}">
-          <button class="secondary" onclick="submitScore(${m.id}, ${m.player1_id})">${p1} 승</button>
-          <button class="secondary" onclick="submitScore(${m.id}, ${m.player2_id})">${p2} 승</button>
+          <input placeholder="63만 입력해도 6-3" id="score-${m.id}" style="width:110px;padding:6px;border:1px solid var(--border-strong);border-radius:8px;" value="${m.score || ''}">
+          <button class="secondary" style="${m.winner_id === m.player1_id ? 'background:#0e9f8c;color:#fff;border-color:#0e9f8c;font-weight:800;' : ''}" onclick="submitScore(${m.id}, ${m.player1_id}, event)">${p1} 승</button>
+          <button class="secondary" style="${m.winner_id === m.player2_id ? 'background:#0e9f8c;color:#fff;border-color:#0e9f8c;font-weight:800;' : ''}" onclick="submitScore(${m.id}, ${m.player2_id}, event)">${p2} 승</button>
         ` : ''}
       </span>
     </div>`;
   }).join("");
 }
 
-function submitScore(mid, winnerId) {
+function submitScore(mid, winnerId, ev) {
   if (!winnerId) { toast("아직 상대가 정해지지 않은 경기입니다.", "error"); return; }
-  const score = document.getElementById(`score-${mid}`).value;
+  const scoreEl = document.getElementById(`score-${mid}`);
+  let score = scoreEl ? scoreEl.value : "";
+  score = normalizeScore(score);
+  if (scoreEl) scoreEl.value = score;
+  // 클릭한 버튼 시각 강조
+  if (ev && ev.target) {
+    const btn = ev.target.closest('button');
+    if (btn && btn.parentElement) {
+      btn.parentElement.querySelectorAll('button').forEach(b => {
+        if (b.textContent.includes('승')) {
+          b.style.background = ''; b.style.color = ''; b.style.borderColor = '';
+        }
+      });
+      btn.style.background = '#0e9f8c'; btn.style.color = '#fff'; btn.style.borderColor = '#0e9f8c';
+    }
+  }
   apiPost(`/api/matches/${mid}/score`, {winner_id: winnerId, score})
     .then(() => { toast("경기 결과가 저장되었습니다.", "success"); loadDraw(); })
     .catch((err) => toast(err.message, "error"));

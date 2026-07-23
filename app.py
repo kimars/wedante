@@ -1144,6 +1144,15 @@ def tournament_page(tid):
     groups = {}
     for m in prelim:
         groups.setdefault(m.group_no, []).append(m)
+    # 각 조의 순위 계산 (3경기 다 종료된 조만)
+    group_rankings = {}
+    for gno, ms in groups.items():
+        try:
+            ranking = _calculate_group_ranking(ms)
+            if ranking:
+                group_rankings[gno] = ranking
+        except Exception as e:
+            app.logger.warning(f"조 {gno} 순위 계산 실패: {e}")
     my_participation = None
     if current_user.is_authenticated:
         my_participation = TournamentParticipant.query.filter_by(
@@ -1153,6 +1162,7 @@ def tournament_page(tid):
     return render_template("tournament.html", t=t, groups=groups, main=main,
                             call_types=CALL_TYPES, my_participation=my_participation,
                             participant_count=participant_count,
+                            group_rankings=group_rankings,
                             is_manager=is_manager)
 
 
