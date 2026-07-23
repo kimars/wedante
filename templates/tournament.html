@@ -256,7 +256,40 @@
   </div>
   <div id="prelim-groups" class="prelim-groups">
     {% if groups %}
-    <p style="color:var(--ink-faint);font-size:13px;padding:20px;text-align:center;">대진표 불러오는 중...</p>
+      {# 서버 사이드 초기 렌더 - JS 로드/실행 실패해도 최소한 이건 보임 #}
+      {% for gno, ms in groups.items() %}
+      <div class="prelim-group-card">
+        <div class="prelim-group-head">
+          <span class="prelim-group-title">{{ gno }}조</span>
+        </div>
+        {% for m in ms %}
+        <div class="prelim-match-row">
+          <div class="prelim-match-label">
+            <span class="seq-badge">{{ m.seq_in_group or loop.index }}경기</span>
+            {% if m.player1 %}{{ m.player1.name }}{% if m.player1_partner %}/{{ m.player1_partner.name }}{% endif %}
+            {% else %}?{% endif %}
+            <span class="vs">vs</span>
+            {% if m.player2 %}{{ m.player2.name }}{% if m.player2_partner %}/{{ m.player2_partner.name }}{% endif %}
+            {% else %}?{% endif %}
+          </div>
+          <div class="prelim-match-meta">
+            <span class="score-chip {% if m.status == '진행중' %}live{% elif m.status == '종료' %}done{% endif %}">
+              {% if m.status == '종료' %}
+                {% if m.score and m.winner_id %}
+                  {{ m.score }} · {% if m.winner_id == m.player1_id and m.player1 %}{{ m.player1.name }}
+                  {% elif m.winner_id == m.player2_id and m.player2 %}{{ m.player2.name }}
+                  {% endif %} 승
+                {% else %}경기종료{% endif %}
+              {% elif m.status == '진행중' %}경기중
+              {% else %}경기전{% endif %}
+            </span>
+            {% if m.court %}<span style="font-size:11px;color:#f59e0b;font-weight:700;margin-left:6px;">코트 {{ m.court }}</span>{% endif %}
+            {% if m.scheduled_time %}<span style="font-size:11px;color:var(--ink-faint);margin-left:6px;">{{ m.scheduled_time }}</span>{% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endfor %}
     {% else %}
     <p style="color:var(--ink-faint);">아직 예선 대진표가 생성되지 않았습니다.</p>
     {% endif %}
@@ -265,7 +298,47 @@
 
 <div id="bracket-tab-main" class="bracket-tab-panel" style="display:none;">
   <h3 style="margin-top:0;">본선 대진표</h3>
-  <div id="main-bracket" class="bracket"></div>
+  <div id="main-bracket" class="bracket">
+    {% if main %}
+      {# 서버 사이드 본선 렌더 - JS 실패 대비 기본 표시 #}
+      {% set rounds = {} %}
+      {% for m in main %}
+        {% if rounds.update({m.round_name: rounds.get(m.round_name, []) + [m]}) %}{% endif %}
+      {% endfor %}
+      {% set ROUND_ORDER = ["256강","128강","64강","32강","16강","8강","준결승","결승"] %}
+      {% for rname in ROUND_ORDER %}
+        {% if rname in rounds %}
+        <div class="bracket-round">
+          <div class="round-label">{{ rname }}</div>
+          <div class="round-body">
+            {% for m in rounds[rname]|sort(attribute='match_no') %}
+            <div class="bracket-match {% if m.status == '종료' %}done{% elif m.status == '진행중' %}live{% endif %}" style="margin:8px 0;">
+              {% if m.court and m.status != '종료' %}<span class="bracket-court-tag">코트 {{ m.court }}</span>{% endif %}
+              <div class="p {% if m.winner_id == m.player1_id %}win{% endif %}">
+                <span class="name{% if m.player1_is_bye %} bye-slot{% elif not m.player1 %} placeholder{% endif %}">
+                  {% if m.player1_is_bye %}BYE
+                  {% elif m.player1 %}{{ m.player1.name }}{% if m.player1_partner %}/{{ m.player1_partner.name }}{% endif %}
+                  {% else %}?{% endif %}
+                </span>
+              </div>
+              <div class="p {% if m.winner_id == m.player2_id %}win{% endif %}">
+                <span class="name{% if m.player2_is_bye %} bye-slot{% elif not m.player2 %} placeholder{% endif %}">
+                  {% if m.player2_is_bye %}BYE
+                  {% elif m.player2 %}{{ m.player2.name }}{% if m.player2_partner %}/{{ m.player2_partner.name }}{% endif %}
+                  {% else %}?{% endif %}
+                </span>
+              </div>
+              {% if m.score %}<div style="text-align:center;font-size:11px;font-weight:800;color:#0e9f8c;">{{ m.score }}</div>{% endif %}
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+      {% endfor %}
+    {% else %}
+    <p style="color:var(--ink-faint);padding:20px;">아직 본선 대진표가 없습니다.</p>
+    {% endif %}
+  </div>
 </div>
 
 {% endblock %}
@@ -273,46 +346,52 @@
 {% block scripts %}
 <script>
 // ============================================================
-// [디버그] 전역 에러 캡처 - JS 크래시 시 화면에 직접 표시
-// 사용자가 F12 없이도 문제 확인 가능. 프로덕션에서도 유지.
+// [디버그] 화면에 스크립트 실행 상태 표시
 // ============================================================
+(function() {
+  const debugBox = document.createElement('div');
+  debugBox.id = '__debug_box';
+  debugBox.style.cssText = 'position:fixed;bottom:10px;right:10px;background:#111;color:#0f0;padding:8px 12px;border-radius:8px;font-family:monospace;font-size:11px;max-width:400px;max-height:300px;overflow:auto;z-index:99999;opacity:0.9;line-height:1.5;';
+  debugBox.innerHTML = '<strong style="color:#ff0;">🔧 DEBUG v22</strong><br>';
+  document.body.appendChild(debugBox);
+  window.__dlog = function(msg, color) {
+    const line = document.createElement('div');
+    line.innerHTML = `<span style="color:${color||'#0f0'};">[${new Date().toLocaleTimeString()}]</span> ${msg}`;
+    debugBox.appendChild(line);
+    debugBox.scrollTop = debugBox.scrollHeight;
+  };
+  window.__dlog('스크립트 진입 OK');
+})();
+
+// 전역 에러 캐처
 window.addEventListener('error', function(e) {
+  window.__dlog && window.__dlog(`🔴 ERROR: ${e.message} @ ${(e.filename||'').split('/').pop()}:${e.lineno}`, '#f66');
   const box = document.getElementById('prelim-groups') || document.getElementById('main-bracket');
   if (box && !box.dataset.errorShown) {
     box.dataset.errorShown = '1';
     box.innerHTML = `<div style="background:#fef2f2;color:#b91c1c;padding:20px;border-radius:8px;border:2px solid #fca5a5;margin:16px 0;">
       <strong style="font-size:16px;">🔴 페이지 로드 중 오류 발생</strong>
       <p style="margin:8px 0 4px;font-family:monospace;font-size:12px;background:#fff;padding:8px;border-radius:4px;word-break:break-all;">
-        ${(e.message || 'unknown error').replace(/</g,'&lt;')}
+        ${(e.message || 'unknown').replace(/</g,'&lt;')}
       </p>
       <p style="margin:4px 0;font-size:11px;color:#7f1d1d;">
         위치: <code>${(e.filename||'').split('/').pop()}:${e.lineno}:${e.colno}</code>
-      </p>
-      <p style="margin:8px 0 0;font-size:12px;color:#7f1d1d;">
-        이 메시지를 관리자에게 보내주세요.
       </p>
     </div>`;
   }
 });
 window.addEventListener('unhandledrejection', function(e) {
-  console.error("Unhandled promise rejection:", e.reason);
-  const box = document.getElementById('prelim-groups');
-  if (box && !box.dataset.errorShown) {
-    box.dataset.errorShown = '1';
-    box.innerHTML = `<div style="background:#fef2f2;color:#b91c1c;padding:20px;border-radius:8px;border:2px solid #fca5a5;margin:16px 0;">
-      <strong style="font-size:16px;">🔴 비동기 처리 오류</strong>
-      <p style="margin:8px 0 0;font-family:monospace;font-size:12px;background:#fff;padding:8px;border-radius:4px;word-break:break-all;">
-        ${String(e.reason || 'unknown').replace(/</g,'&lt;')}
-      </p>
-    </div>`;
-  }
+  window.__dlog && window.__dlog(`🔴 PROMISE: ${e.reason}`, '#f66');
 });
 
 const TID = {{ t.id }};
 const IS_MANAGER = {{ 'true' if is_manager else 'false' }};
 const IS_DOUBLES = {{ "'doubles'" if t.format == 'doubles' else "''" }} === 'doubles';
 const MY_USER_ID = {{ current_user.id if current_user.is_authenticated else 'null' }};
+window.__dlog(`TID=${TID}, IS_MANAGER=${IS_MANAGER}, IS_DOUBLES=${IS_DOUBLES}`);
+
 const socket = io();
+window.__dlog('io() 호출 완료');
 socket.on("connect", () => socket.emit("join_tournament", {tournament_id: TID}));
 socket.on("bracket_update", () => loadDraw());
 
@@ -504,30 +583,45 @@ function switchBracketTab(name) {
 }
 
 function loadDraw() {
+  window.__dlog && window.__dlog('🚀 loadDraw 시작', '#0ff');
   fetch(`/api/tournaments/${TID}/draw`)
-    .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+    .then(r => {
+      window.__dlog && window.__dlog(`📡 응답 도착: HTTP ${r.status}`, '#0ff');
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    })
     .then(data => {
-      // 로딩 문구 즉시 제거 (렌더 함수 크래시해도 사용자에게 보이지 않음)
+      window.__dlog && window.__dlog(`📦 JSON 파싱 완료: prelim=${(data.prelim||[]).length}, main=${(data.main||[]).length}`, '#0ff');
+      // 로딩 문구 즉시 제거
       try {
         const pe = document.getElementById("prelim-groups");
         if (pe && pe.innerHTML.includes("불러오는 중")) pe.innerHTML = "";
         const me = document.getElementById("main-bracket");
         if (me && me.innerHTML.includes("불러오는 중")) me.innerHTML = "";
       } catch (_) {}
-      try { renderPrelim(data.prelim || [], data.group_rankings || {}); }
+      try {
+        renderPrelim(data.prelim || [], data.group_rankings || {});
+        window.__dlog && window.__dlog('✅ renderPrelim 완료', '#0f0');
+      }
       catch (e) {
+        window.__dlog && window.__dlog(`🔴 renderPrelim FAIL: ${e.message}`, '#f66');
         console.error("renderPrelim 실패:", e);
         const el = document.getElementById("prelim-groups");
         if (el) el.innerHTML = `<p style="color:#e33;padding:20px;">예선 렌더링 오류: ${e.message}</p>`;
       }
-      try { renderMain(data.main || []); }
+      try {
+        renderMain(data.main || []);
+        window.__dlog && window.__dlog('✅ renderMain 완료', '#0f0');
+      }
       catch (e) {
+        window.__dlog && window.__dlog(`🔴 renderMain FAIL: ${e.message}`, '#f66');
         console.error("renderMain 실패:", e);
         const el = document.getElementById("main-bracket");
         if (el) el.innerHTML = `<p style="color:#e33;padding:20px;">본선 렌더링 오류: ${e.message}</p>`;
       }
     })
     .catch(err => {
+      window.__dlog && window.__dlog(`🔴 fetch FAIL: ${err.message}`, '#f66');
       console.error("Draw load failed:", err);
       const el = document.getElementById("prelim-groups");
       if (el) el.innerHTML = `<p style="color:#e33;padding:20px;background:#fef2f2;border-radius:8px;">
@@ -820,6 +914,7 @@ function renderCourts(all) {
 }
 
 loadDraw();
+window.__dlog && window.__dlog('◀ loadDraw() 호출 완료 (비동기 진행 중)');
 
 // ---- 점수 입력 모달 (관리자 전용) ----
 let scoreModalMatchId = null;
