@@ -1987,17 +1987,24 @@ def api_get_draw(tid):
             "source_match_id": m.source_match_id,
             "source_role": m.source_role,
         }
-    # 각 조의 순위 (조 종료 시)
-    from collections import defaultdict
-    prelim_by_group = defaultdict(list)
-    for m in prelim:
-        if m.group_no:
-            prelim_by_group[m.group_no].append(m)
+    # 각 조의 순위 (조 종료 시) - 실패해도 매치 데이터는 반환
     group_rankings = {}
-    for gno, ms in prelim_by_group.items():
-        ranking = _calculate_group_ranking(ms)
-        if ranking:
-            group_rankings[gno] = ranking
+    try:
+        from collections import defaultdict
+        prelim_by_group = defaultdict(list)
+        for m in prelim:
+            if m.group_no:
+                prelim_by_group[m.group_no].append(m)
+        for gno, ms in prelim_by_group.items():
+            try:
+                ranking = _calculate_group_ranking(ms)
+                if ranking:
+                    group_rankings[gno] = ranking
+            except Exception as e:
+                app.logger.warning(f"조 {gno} 순위 계산 실패: {e}")
+    except Exception as e:
+        app.logger.warning(f"group_rankings 전체 계산 실패: {e}")
+        group_rankings = {}
 
     return jsonify({
         "prelim": [m2d(m) for m in prelim],
@@ -2960,6 +2967,91 @@ def find_user(query):
         elif u.can_create_tournament: role = " [대회생성권한]"
         click.echo(f"  {u.id:>4}  {u.phone:<15}  {u.name}{role}"
                     f"  ({u.region or '-'}, {u.club or '-'})")
+
+
+@app.cli.command("diagnose")
+def diagnose_db():
+    """DB 상태 진단 - 대회, 참가자, 매치, 회원 등 요약 통계.
+
+    참가자가 0명으로 표시되거나 데이터 문제 의심 시 실행.
+    실행: flask --app app diagnose
+    """
+    click.echo("=" * 60)
+    click.echo("🔍 위단테 DB 진단")
+    click.echo("=" * 60)
+
+    # 전체 통계
+    org_count = Organizer.query.count()
+    user_count = User.query.count()
+    admin_count = User.query.filter(User.is_admin.is_(True)).count()
+    superadmin_count = User.query.filter(User.is_superadmin.is_(True)).count()
+    tournament_count = Tournament.query.count()
+    participant_count = TournamentParticipant.query.count()
+    match_count = Match.query.count()
+
+    click.echo(f"📊 전체 통계")
+    click.echo(f"  Organizer:          {org_count}")
+    click.echo(f"  회원:               {user_count} (관리자 {admin_count}, 최고관리자 {superadmin_count})")
+    click.echo(f"  대회:               {tournament_count}")
+    click.echo(f"  참가 신청 총:        {participant_count}")
+    click.echo(f"  매치 총:             {match_count}")
+    click.echo()
+
+    # 대회별 상세
+    if tournament_count > 0:
+        click.echo("🏆 대회별 참가자/매치 현황")
+        click.echo("-" * 60)
+        tournaments = Tournament.query.order_by(Tournament.id.desc()).limit(10).all()
+        for t in tournaments:
+            parts = TournamentParticipant.query.filter_by(tournament_id=t.id).count()
+            confirmed = TournamentParticipant.query.filter_by(tournament_id=t.id, status="확정").count()
+            waiting = TournamentParticipant.query.filter_by(tournament_id=t.id, status="대기").count()
+            payment_req = TournamentParticipant.query.filter_by(tournament_id=t.id, status="입금확인요청").count()
+            matches = Match.query.filter_by(tournament_id=t.id).count()
+            prelim = Match.query.filter_by(tournament_id=t.id, stage="prelim").count()
+            main = Match.query.filter_by(tournament_id=t.id, stage="main").count()
+
+            click.echo(f"  #{t.id} {t.title}")
+            click.echo(f"     상태: {t.status}, 일자: {t.event_date or '미정'}, 종목: {t.format or '?'}")
+            click.echo(f"     참가: 총 {parts}명 (확정 {confirmed} · 대기 {waiting} · 입금확인요청 {payment_req})")
+            click.echo(f"     매치: 총 {matches} (예선 {prelim} · 본선 {main})")
+
+            # 만약 참가자가 0명이라면 매치 참여자들 확인
+            if parts == 0 and matches > 0:
+                click.echo(f"     ⚠ 참가자 0명인데 매치는 있음! 매치에 등장한 user_id 조사:")
+                from sqlalchemy import distinct
+                m_user_ids = set()
+                for m in Match.query.filter_by(tournament_id=t.id).all():
+                    if m.player1_id: m_user_ids.add(m.player1_id)
+                    if m.player2_id: m_user_ids.add(m.player2_id)
+                click.echo(f"       매치에 등장한 고유 user_id: {len(m_user_ids)}개")
+                if m_user_ids:
+                    users_in_matches = User.query.filter(User.id.in_(m_user_ids)).all()
+                    click.echo(f"       그 회원들: {[u.name+'('+u.phone+')' for u in users_in_matches[:5]]}...")
+        click.echo()
+
+    # 회원 샘플
+    if user_count > 0:
+        click.echo("👥 최근 가입한 회원 5명")
+        click.echo("-" * 60)
+        recent = User.query.order_by(User.id.desc()).limit(5).all()
+        for u in recent:
+            role = "최고관리자" if u.is_superadmin else ("관리자" if u.is_admin else "일반")
+            click.echo(f"  #{u.id} {u.name} ({u.phone}) · {role} · 가입일: {u.created_at.strftime('%Y-%m-%d') if u.created_at else '?'}")
+        click.echo()
+
+    # DB 연결 정보 (보안상 URL 마스킹)
+    db_url = os.environ.get("DATABASE_URL", "")
+    if db_url:
+        # postgresql://user:pass@host/db → postgresql://***@host/db
+        import re
+        masked = re.sub(r'://[^@]+@', '://***@', db_url)
+        click.echo(f"🔗 DATABASE_URL (마스킹): {masked[:80]}")
+
+    click.echo()
+    click.echo("=" * 60)
+    click.echo("진단 완료. 이 결과를 캡처해서 알려주시면 문제 원인 특정 가능.")
+    click.echo("=" * 60)
 
 
 @app.cli.command("reset-data")

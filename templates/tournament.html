@@ -471,10 +471,18 @@ function loadDraw() {
   fetch(`/api/tournaments/${TID}/draw`)
     .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
     .then(data => {
-      renderPrelim(data.prelim, data.group_rankings || {});
-      renderMain(data.main);
+      renderPrelim(data.prelim || [], data.group_rankings || {});
+      renderMain(data.main || []);
     })
-    .catch(err => console.error("Draw load failed:", err));
+    .catch(err => {
+      console.error("Draw load failed:", err);
+      const el = document.getElementById("prelim-groups");
+      if (el) el.innerHTML = `<p style="color:#e33;padding:20px;background:#fef2f2;border-radius:8px;">
+        ⚠ 대진표를 불러오지 못했습니다. (${err.message})<br>
+        <small style="color:var(--ink-faint);">잠시 후 페이지를 새로고침해주세요.</small>
+      </p>`;
+      toast("대진표 로드 실패: " + err.message, "error");
+    });
 }
 
 function teamLabel(name, partner) {
